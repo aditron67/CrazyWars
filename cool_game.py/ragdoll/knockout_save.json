@@ -1,0 +1,13 @@
+{
+  "coins": 5,
+  "eggs": 5,
+  "total_wins": 0,
+  "total_kills": 0,
+  "unlocked_animals": [
+    "duck",
+    "penguin",
+    "husky"
+  ],
+  "selected_animal": "penguin",
+  "username": "sigma"
+}

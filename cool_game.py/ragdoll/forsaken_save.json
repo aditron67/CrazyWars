@@ -1,0 +1,24 @@
+{
+  "coins": 230,
+  "total_escapes": 0,
+  "total_deaths": 1,
+  "notes_found_total": 0,
+  "unlocked_characters": [
+    "survivor"
+  ],
+  "selected_character": "survivor",
+  "username": "Survivor",
+  "best_time": null,
+  "escapes": 2,
+  "deaths": 7,
+  "rounds_played": 43,
+  "selected_survivor": "scout",
+  "malice": 50,
+  "unlocked_survivors": [
+    "builderman"
+  ],
+  "unlocked_killers": [
+    "faceless"
+  ],
+  "selected_killer": "john_doe"
+}
