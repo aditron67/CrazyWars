@@ -1,0 +1,1966 @@
+import pygame
+import sys
+import math
+import random
+import os
+import subprocess
+
+pygame.init()
+pygame.mixer.init()
+
+# ─── SCREEN ───
+WIDTH, HEIGHT = 1000, 600
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("1x1x1x1  vs  Shedletsky")
+clock = pygame.time.Clock()
+
+# ─── MUSIC: The Creation of Hatred ───
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+MUSIC_FILE = os.path.join(SCRIPT_DIR, "creation_of_hatred.mp3")
+
+def download_music():
+    """Download 'The Creation of Hatred' via yt-dlp if not present."""
+    if os.path.exists(MUSIC_FILE):
+        return True
+    try:
+        print("Downloading 'The Creation of Hatred'...")
+        subprocess.run([
+            sys.executable, "-m", "yt_dlp",
+            "-x", "--audio-format", "mp3",
+            "-o", MUSIC_FILE.replace(".mp3", ".%(ext)s"),
+            "--no-playlist",
+            "ytsearch1:The Creation of Hatred Roblox"
+        ], check=True, timeout=120)
+        if os.path.exists(MUSIC_FILE):
+            return True
+        # yt-dlp may name it slightly differently
+        for fname in os.listdir(SCRIPT_DIR):
+            if "creation_of_hatred" in fname.lower() and fname.endswith((".mp3", ".m4a", ".webm", ".opus")):
+                actual = os.path.join(SCRIPT_DIR, fname)
+                if actual != MUSIC_FILE:
+                    os.rename(actual, MUSIC_FILE)
+                return True
+    except Exception as e:
+        print(f"Could not download music: {e}")
+        print("Place 'creation_of_hatred.mp3' in the fight/ folder to hear music.")
+    return False
+
+def start_music():
+    if download_music():
+        try:
+            pygame.mixer.music.load(MUSIC_FILE)
+            pygame.mixer.music.set_volume(0.45)
+            pygame.mixer.music.play(-1)  # loop forever
+        except Exception as e:
+            print(f"Could not play music: {e}")
+
+start_music()
+
+# ─── COLORS ───
+WHITE   = (255, 255, 255)
+BLACK   = (0, 0, 0)
+RED     = (220, 30, 30)
+DARK_RED = (150, 10, 10)
+GLOW_RED = (255, 50, 50)
+BLUE    = (50, 120, 220)
+YELLOW  = (255, 220, 50)
+GOLD    = (255, 200, 0)
+ORANGE  = (255, 140, 0)
+GREEN   = (50, 200, 80)
+GRAY    = (130, 130, 130)
+DARK_GRAY = (60, 60, 60)
+SKIN    = (255, 204, 153)
+BROWN   = (139, 90, 43)
+LIGHT_BROWN = (180, 120, 60)
+DOMINO_WHITE = (240, 240, 240)
+DOMINO_BLACK = (20, 20, 20)
+SPARK_COLORS = [(255, 255, 100), (255, 200, 50), (255, 150, 0), (255, 255, 255)]
+PURPLE = (120, 40, 180)
+DARK_PURPLE = (80, 20, 130)
+
+# ─── FONTS ───
+font_big   = pygame.font.SysFont("Impact", 60)
+font_med   = pygame.font.SysFont("Impact", 36)
+font_small = pygame.font.SysFont("Impact", 24)
+font_tiny  = pygame.font.SysFont("Arial", 16)
+font_hud   = pygame.font.SysFont("Consolas", 20, bold=True)
+
+# ─── PARTICLES ───
+particles = []
+
+def spawn_sparks(x, y, count=18):
+    for _ in range(count):
+        angle = random.uniform(0, math.pi * 2)
+        speed = random.uniform(3, 9)
+        life  = random.randint(10, 25)
+        color = random.choice(SPARK_COLORS)
+        particles.append({
+            "x": x, "y": y,
+            "vx": math.cos(angle) * speed,
+            "vy": math.sin(angle) * speed - 2,
+            "life": life, "max_life": life,
+            "color": color, "size": random.uniform(2, 5)
+        })
+
+def spawn_hit_effect(x, y, color, count=10):
+    for _ in range(count):
+        angle = random.uniform(0, math.pi * 2)
+        speed = random.uniform(2, 6)
+        life  = random.randint(8, 18)
+        particles.append({
+            "x": x, "y": y,
+            "vx": math.cos(angle) * speed,
+            "vy": math.sin(angle) * speed - 1,
+            "life": life, "max_life": life,
+            "color": color, "size": random.uniform(2, 4)
+        })
+
+def spawn_ability_effect(x, y, color, count=25):
+    for _ in range(count):
+        angle = random.uniform(0, math.pi * 2)
+        speed = random.uniform(4, 10)
+        life  = random.randint(15, 35)
+        particles.append({
+            "x": x, "y": y,
+            "vx": math.cos(angle) * speed,
+            "vy": math.sin(angle) * speed,
+            "life": life, "max_life": life,
+            "color": color, "size": random.uniform(3, 7)
+        })
+
+def update_particles():
+    for p in particles[:]:
+        p["x"] += p["vx"]
+        p["y"] += p["vy"]
+        p["vy"] += 0.15
+        p["life"] -= 1
+        if p["life"] <= 0:
+            particles.remove(p)
+
+def draw_particles(surf):
+    for p in particles:
+        alpha = p["life"] / p["max_life"]
+        size = p["size"] * alpha
+        color = tuple(int(c * alpha) for c in p["color"])
+        pygame.draw.circle(surf, color, (int(p["x"]), int(p["y"])), max(1, int(size)))
+
+
+# ══════════════════════════════════════════════════════════
+#  CHARACTER DRAWING  –  Roblox-style blocky sprites
+# ══════════════════════════════════════════════════════════
+
+# Roblox body proportions (scaled for side-view fighting game)
+HEAD_W, HEAD_H = 28, 28        # 1x1 stud head
+TORSO_W, TORSO_H = 28, 34     # 2x1 stud torso
+ARM_W, ARM_H = 10, 32          # limb
+LEG_W, LEG_H = 12, 32          # limb
+
+# 1x1x1x1 palette
+X_SKIN       = (25, 25, 25)        # near-black skin (corrupted)
+X_TORSO      = (35, 35, 40)        # very dark shirt
+X_TORSO_DARK = (20, 20, 25)
+X_PANTS      = (25, 25, 30)
+X_SHOE       = (15, 15, 15)
+
+# Shedletsky palette
+S_SKIN       = (255, 204, 153)     # classic Roblox yellow-skin
+S_SKIN_SHADE = (230, 180, 130)
+S_SHIRT      = (45, 100, 200)      # Blame John blue
+S_SHIRT_DARK = (30, 75, 160)
+S_PANTS      = (55, 55, 145)       # dark-blue jeans
+S_SHOE       = (110, 70, 35)
+S_HAIR       = (100, 60, 25)       # brown hair
+S_HAIR_DARK  = (70, 40, 15)
+
+
+def _draw_roblox_sword(surf, hx, hy, angle, f, blade_col, edge_col, hilt_col, blade_len=42):
+    """Draw a Roblox-style linked-sword at hand position, rotated."""
+    rad = math.radians(angle * f)
+    # blade
+    bx = hx + math.cos(rad) * blade_len
+    by = hy + math.sin(rad) * blade_len
+    pygame.draw.line(surf, blade_col, (int(hx), int(hy)), (int(bx), int(by)), 5)
+    pygame.draw.line(surf, edge_col,  (int(hx), int(hy)), (int(bx), int(by)), 2)
+    # tip shine
+    tx = hx + math.cos(rad) * (blade_len - 4)
+    ty = hy + math.sin(rad) * (blade_len - 4)
+    pygame.draw.circle(surf, WHITE, (int(bx), int(by)), 2)
+    # crossguard
+    perp = rad + math.pi / 2
+    g1 = (int(hx + math.cos(perp) * 7), int(hy + math.sin(perp) * 7))
+    g2 = (int(hx - math.cos(perp) * 7), int(hy - math.sin(perp) * 7))
+    pygame.draw.line(surf, hilt_col, g1, g2, 4)
+    # pommel
+    px = hx - math.cos(rad) * 5
+    py = hy - math.sin(rad) * 5
+    pygame.draw.circle(surf, hilt_col, (int(px), int(py)), 3)
+
+
+def draw_1x1x1x1(surf, x, y, facing, action, frame, health_pct):
+    """Roblox-style 1x1x1x1: dark body, Domino Crown, single red glowing eye, dark linked sword."""
+    f = 1 if facing == "right" else -1
+    walk_bob = math.sin(frame * 0.35) * 3 if action == "walk" else 0
+    leg_swing = math.sin(frame * 0.35) * 8 if action == "walk" else 0
+
+    # ── SHADOW on ground ──
+    shadow_surf = pygame.Surface((44, 10), pygame.SRCALPHA)
+    pygame.draw.ellipse(shadow_surf, (0, 0, 0, 50), (0, 0, 44, 10))
+    surf.blit(shadow_surf, (x - 22, y + 30))
+
+    # ── LEGS (Roblox blocky) ──
+    l_leg_x = x - 7
+    r_leg_x = x + 7 - LEG_W + 4  # overlap slightly at center
+    # left leg
+    leg_pts_l = [(l_leg_x - 2, y + 2), (l_leg_x + LEG_W - 2, y + 2),
+                 (l_leg_x + LEG_W - 2 + int(leg_swing * 0.3), y + LEG_H),
+                 (l_leg_x + int(leg_swing * 0.3), y + LEG_H)]
+    pygame.draw.polygon(surf, X_PANTS, leg_pts_l)
+    pygame.draw.polygon(surf, X_TORSO_DARK, leg_pts_l, 1)
+    # right leg
+    leg_pts_r = [(r_leg_x + 2, y + 2), (r_leg_x + LEG_W + 2, y + 2),
+                 (r_leg_x + LEG_W + 2 - int(leg_swing * 0.3), y + LEG_H),
+                 (r_leg_x + 2 - int(leg_swing * 0.3), y + LEG_H)]
+    pygame.draw.polygon(surf, X_PANTS, leg_pts_r)
+    pygame.draw.polygon(surf, X_TORSO_DARK, leg_pts_r, 1)
+    # shoes
+    pygame.draw.rect(surf, X_SHOE, (l_leg_x - 3 + int(leg_swing * 0.3), y + LEG_H - 2, LEG_W + 2, 5))
+    pygame.draw.rect(surf, X_SHOE, (r_leg_x + 1 - int(leg_swing * 0.3), y + LEG_H - 2, LEG_W + 2, 5))
+
+    # ── TORSO (Roblox block) ──
+    torso_y = y - TORSO_H + 2 + int(walk_bob)
+    torso_rect = pygame.Rect(x - TORSO_W // 2, torso_y, TORSO_W, TORSO_H)
+    pygame.draw.rect(surf, X_TORSO, torso_rect)
+    pygame.draw.rect(surf, X_TORSO_DARK, torso_rect, 2)
+    # dark shirt crease details
+    pygame.draw.line(surf, X_TORSO_DARK, (x, torso_y + 4), (x, torso_y + TORSO_H - 4), 1)
+    # collar V
+    pygame.draw.line(surf, (50, 50, 55), (x - 6, torso_y + 2), (x, torso_y + 10), 1)
+    pygame.draw.line(surf, (50, 50, 55), (x + 6, torso_y + 2), (x, torso_y + 10), 1)
+
+    # ── HEAD (Roblox block) ──
+    head_x = x
+    head_y = torso_y - HEAD_H + 2
+    head_rect = pygame.Rect(head_x - HEAD_W // 2, head_y, HEAD_W, HEAD_H)
+    pygame.draw.rect(surf, X_SKIN, head_rect)
+    pygame.draw.rect(surf, (40, 40, 45), head_rect, 2)
+
+    # ── RED GLOWING EYE (right eye only; left is dead/dark) ──
+    eye_front_x = head_x + f * 5
+    eye_back_x  = head_x - f * 4
+    eye_y_pos   = head_y + 12
+
+    # glowing eye aura (pulsing)
+    glow_r = 8 + math.sin(frame * 0.12) * 3
+    glow_surf = pygame.Surface((int(glow_r * 4), int(glow_r * 4)), pygame.SRCALPHA)
+    pygame.draw.circle(glow_surf, (255, 0, 0, 45), (int(glow_r * 2), int(glow_r * 2)), int(glow_r * 2))
+    pygame.draw.circle(glow_surf, (255, 20, 20, 80), (int(glow_r * 2), int(glow_r * 2)), int(glow_r))
+    surf.blit(glow_surf, (eye_front_x - int(glow_r * 2), eye_y_pos - int(glow_r * 2)))
+    # actual eye
+    pygame.draw.circle(surf, (255, 30, 30), (eye_front_x, eye_y_pos), 5)
+    pygame.draw.circle(surf, (255, 180, 180), (eye_front_x, eye_y_pos), 2)  # bright center
+    # dead eye
+    pygame.draw.circle(surf, (15, 15, 15), (eye_back_x, eye_y_pos), 4)
+    pygame.draw.circle(surf, (30, 30, 30), (eye_back_x, eye_y_pos), 2)
+    # sinister mouth line
+    pygame.draw.line(surf, (50, 15, 15), (head_x - 5, head_y + 20), (head_x + 5, head_y + 19), 2)
+
+    # ── DOMINO CROWN (iconic hat) ──
+    crown_base_y = head_y - 2
+    cw, ch = 34, 14
+    crown_x = head_x - cw // 2
+    # main crown band (white domino with black pips)
+    pygame.draw.rect(surf, DOMINO_WHITE, (crown_x, crown_base_y, cw, ch), border_radius=2)
+    pygame.draw.rect(surf, DOMINO_BLACK, (crown_x, crown_base_y, cw, ch), 2, border_radius=2)
+    # divider line down the middle (domino split)
+    pygame.draw.line(surf, DOMINO_BLACK, (head_x, crown_base_y + 2), (head_x, crown_base_y + ch - 2), 2)
+    # pips left side (3 pips = domino 3)
+    for dx, dy in [(-10, 4), (-6, 9), (-10, 9)]:
+        pygame.draw.circle(surf, DOMINO_BLACK, (head_x + dx, crown_base_y + dy), 2)
+    # pips right side (2 pips = domino 2)
+    for dx, dy in [(6, 4), (10, 9)]:
+        pygame.draw.circle(surf, DOMINO_BLACK, (head_x + dx, crown_base_y + dy), 2)
+    # crown spikes (5 golden-white spikes)
+    for i, sx in enumerate([-14, -7, 0, 7, 14]):
+        spike_h = 12 + (i % 2) * 4
+        pts = [
+            (head_x + sx - 4, crown_base_y),
+            (head_x + sx + 4, crown_base_y),
+            (head_x + sx, crown_base_y - spike_h)
+        ]
+        pygame.draw.polygon(surf, DOMINO_WHITE, pts)
+        pygame.draw.polygon(surf, DOMINO_BLACK, pts, 1)
+        # tiny pip on each spike
+        if i % 2 == 0:
+            pygame.draw.circle(surf, DOMINO_BLACK, (head_x + sx, crown_base_y - spike_h + 5), 1)
+
+    # ── ARMS + DARK LINKED SWORD ──
+    shoulder_y = torso_y + 4 + int(walk_bob)
+    arm_color = X_SKIN
+    hand_color = (35, 35, 40)
+
+    if action == "slash":
+        progress = min(frame / 12.0, 1.0)
+        angle = -70 + progress * 150
+        rad = math.radians(angle * f)
+        # sword arm
+        arm_ex = x + f * 18 + math.cos(rad) * 22
+        arm_ey = shoulder_y + math.sin(rad) * 22
+        pygame.draw.line(surf, arm_color, (x + f * TORSO_W // 2, shoulder_y), (int(arm_ex), int(arm_ey)), 8)
+        pygame.draw.rect(surf, hand_color, (int(arm_ex) - 4, int(arm_ey) - 4, 8, 8))
+        _draw_roblox_sword(surf, arm_ex, arm_ey, angle, f,
+                           blade_col=(70, 70, 75), edge_col=(200, 30, 30), hilt_col=DARK_RED)
+        # off arm
+        pygame.draw.line(surf, arm_color, (x - f * TORSO_W // 2, shoulder_y), (x - f * 20, shoulder_y + 22), 8)
+    elif action == "block":
+        bx = x + f * 28
+        pygame.draw.line(surf, arm_color, (x + f * TORSO_W // 2, shoulder_y), (bx, shoulder_y), 8)
+        pygame.draw.rect(surf, hand_color, (bx - 4, shoulder_y - 4, 8, 8))
+        _draw_roblox_sword(surf, bx, shoulder_y, -90, 1,
+                           blade_col=(70, 70, 75), edge_col=(200, 30, 30), hilt_col=DARK_RED, blade_len=40)
+        # red shield aura
+        shield = pygame.Surface((44, 70), pygame.SRCALPHA)
+        pygame.draw.ellipse(shield, (255, 0, 0, 35), (0, 0, 44, 70))
+        surf.blit(shield, (bx - 22, shoulder_y - 35))
+        pygame.draw.line(surf, arm_color, (x - f * TORSO_W // 2, shoulder_y), (x - f * 18, shoulder_y + 20), 8)
+    elif action == "ultra":
+        # ULTRA SLASH – rapid alternating slashes with red fire trail
+        cycle = (frame % 20) / 20.0
+        angle = -60 + math.sin(cycle * math.pi * 2) * 120
+        rad = math.radians(angle * f)
+        arm_ex = x + f * 20 + math.cos(rad) * 24
+        arm_ey = shoulder_y + math.sin(rad) * 24
+        pygame.draw.line(surf, arm_color, (x + f * TORSO_W // 2, shoulder_y), (int(arm_ex), int(arm_ey)), 9)
+        pygame.draw.rect(surf, hand_color, (int(arm_ex) - 4, int(arm_ey) - 4, 8, 8))
+        _draw_roblox_sword(surf, arm_ex, arm_ey, angle, f,
+                           blade_col=(180, 40, 40), edge_col=(255, 100, 50), hilt_col=GOLD, blade_len=48)
+        # fire trail
+        for i in range(5):
+            ta = angle - i * 18 * f
+            tr = math.radians(ta * f)
+            tx = arm_ex + math.cos(tr) * (28 + i * 7)
+            ty = arm_ey + math.sin(tr) * (28 + i * 7)
+            ts = pygame.Surface((14, 14), pygame.SRCALPHA)
+            a = max(0, 120 - i * 25)
+            pygame.draw.circle(ts, (255, int(80 - i * 15), 0, a), (7, 7), 7 - i)
+            surf.blit(ts, (int(tx) - 7, int(ty) - 7))
+        # red aura around body
+        aura = pygame.Surface((80, 100), pygame.SRCALPHA)
+        ar = int(40 + math.sin(frame * 0.25) * 8)
+        pygame.draw.ellipse(aura, (255, 0, 0, 30), (40 - ar, 50 - ar, ar * 2, ar * 2))
+        surf.blit(aura, (x - 40, torso_y - 10))
+        pygame.draw.line(surf, arm_color, (x - f * TORSO_W // 2, shoulder_y), (x - f * 16, shoulder_y + 18), 8)
+    elif action == "entangle":
+        # Entanglement cast — arms raised, purple energy vortex
+        pygame.draw.line(surf, arm_color, (x + f * TORSO_W // 2, shoulder_y), (x + f * 22, shoulder_y - 26), 9)
+        pygame.draw.line(surf, arm_color, (x - f * TORSO_W // 2, shoulder_y), (x - f * 22, shoulder_y - 26), 9)
+        vr = int(28 + math.sin(frame * 0.4) * 12)
+        vs = pygame.Surface((vr * 4, vr * 4), pygame.SRCALPHA)
+        pygame.draw.circle(vs, (120, 40, 180, 60), (vr * 2, vr * 2), vr * 2)
+        pygame.draw.circle(vs, (180, 60, 255, 100), (vr * 2, vr * 2), vr)
+        pygame.draw.circle(vs, (255, 150, 255, 140), (vr * 2, vr * 2), vr // 2)
+        surf.blit(vs, (x - vr * 2, shoulder_y - 26 - vr * 2))
+    elif action == "stun_slash":
+        # reuse slash animation but with blue electric effect
+        progress = min(frame / 12.0, 1.0)
+        angle = -70 + progress * 150
+        rad = math.radians(angle * f)
+        arm_ex = x + f * 18 + math.cos(rad) * 22
+        arm_ey = shoulder_y + math.sin(rad) * 22
+        pygame.draw.line(surf, arm_color, (x + f * TORSO_W // 2, shoulder_y), (int(arm_ex), int(arm_ey)), 8)
+        _draw_roblox_sword(surf, arm_ex, arm_ey, angle, f,
+                           blade_col=(70, 70, 75), edge_col=(200, 30, 30), hilt_col=DARK_RED)
+        pygame.draw.line(surf, arm_color, (x - f * TORSO_W // 2, shoulder_y), (x - f * 20, shoulder_y + 22), 8)
+    else:
+        # idle – sword arm at side, slight bob
+        idle_bob = math.sin(frame * 0.06) * 2
+        arm_end_y = shoulder_y + 24 + idle_bob
+        pygame.draw.line(surf, arm_color, (x + f * TORSO_W // 2, shoulder_y), (x + f * 20, int(arm_end_y)), 8)
+        pygame.draw.rect(surf, hand_color, (x + f * 20 - 4, int(arm_end_y) - 4, 8, 8))
+        _draw_roblox_sword(surf, x + f * 20, arm_end_y, 80, f,
+                           blade_col=(70, 70, 75), edge_col=(200, 30, 30), hilt_col=DARK_RED, blade_len=36)
+        # off arm
+        pygame.draw.line(surf, arm_color, (x - f * TORSO_W // 2, shoulder_y), (x - f * 18, int(arm_end_y)), 8)
+
+
+def draw_shedletsky(surf, x, y, facing, action, frame, health_pct):
+    """Roblox-style Shedletsky: skin tone, Blame John tee, brown messy hair, classic linked sword."""
+    f = 1 if facing == "right" else -1
+    walk_bob = math.sin(frame * 0.35) * 3 if action == "walk" else 0
+    leg_swing = math.sin(frame * 0.35) * 8 if action == "walk" else 0
+
+    # ── SHADOW ──
+    shadow_surf = pygame.Surface((44, 10), pygame.SRCALPHA)
+    pygame.draw.ellipse(shadow_surf, (0, 0, 0, 50), (0, 0, 44, 10))
+    surf.blit(shadow_surf, (x - 22, y + 30))
+
+    # ── LEGS (dark-blue jeans, Roblox blocks) ──
+    l_leg_x = x - 7
+    r_leg_x = x + 7 - LEG_W + 4
+    leg_pts_l = [(l_leg_x - 2, y + 2), (l_leg_x + LEG_W - 2, y + 2),
+                 (l_leg_x + LEG_W - 2 + int(leg_swing * 0.3), y + LEG_H),
+                 (l_leg_x + int(leg_swing * 0.3), y + LEG_H)]
+    pygame.draw.polygon(surf, S_PANTS, leg_pts_l)
+    pygame.draw.polygon(surf, (40, 40, 110), leg_pts_l, 1)
+    leg_pts_r = [(r_leg_x + 2, y + 2), (r_leg_x + LEG_W + 2, y + 2),
+                 (r_leg_x + LEG_W + 2 - int(leg_swing * 0.3), y + LEG_H),
+                 (r_leg_x + 2 - int(leg_swing * 0.3), y + LEG_H)]
+    pygame.draw.polygon(surf, S_PANTS, leg_pts_r)
+    pygame.draw.polygon(surf, (40, 40, 110), leg_pts_r, 1)
+    # brown shoes
+    pygame.draw.rect(surf, S_SHOE, (l_leg_x - 3 + int(leg_swing * 0.3), y + LEG_H - 2, LEG_W + 2, 5))
+    pygame.draw.rect(surf, S_SHOE, (r_leg_x + 1 - int(leg_swing * 0.3), y + LEG_H - 2, LEG_W + 2, 5))
+
+    # ── TORSO (Blame John blue t-shirt) ──
+    torso_y = y - TORSO_H + 2 + int(walk_bob)
+    torso_rect = pygame.Rect(x - TORSO_W // 2, torso_y, TORSO_W, TORSO_H)
+    pygame.draw.rect(surf, S_SHIRT, torso_rect)
+    pygame.draw.rect(surf, S_SHIRT_DARK, torso_rect, 2)
+    # "BLAME" text on chest
+    blame_font = pygame.font.SysFont("Arial", 11, bold=True)
+    blame = blame_font.render("BLAME", True, WHITE)
+    surf.blit(blame, (x - blame.get_width() // 2, torso_y + 5))
+    # "JOHN" text below
+    john = blame_font.render("JOHN", True, WHITE)
+    surf.blit(john, (x - john.get_width() // 2, torso_y + 17))
+
+    # ── HEAD (Roblox skin-colored block) ──
+    head_x = x
+    head_y = torso_y - HEAD_H + 2
+    head_rect = pygame.Rect(head_x - HEAD_W // 2, head_y, HEAD_W, HEAD_H)
+    pygame.draw.rect(surf, S_SKIN, head_rect)
+    pygame.draw.rect(surf, S_SKIN_SHADE, head_rect, 2)
+
+    # ── FACE ──
+    # eyes (classic Roblox dot eyes with slight white)
+    for ex in [head_x + f * 6, head_x - f * 4]:
+        pygame.draw.circle(surf, WHITE, (ex, head_y + 12), 4)
+        pygame.draw.circle(surf, (40, 30, 20), (ex, head_y + 12), 2)
+    # confident smirk
+    smirk_pts = [(head_x - 5, head_y + 19), (head_x + 2, head_y + 20), (head_x + 6, head_y + 17)]
+    pygame.draw.lines(surf, (100, 50, 30), False, smirk_pts, 2)
+
+    # ── HAIR (brown messy/swept – Shedletsky's signature look) ──
+    # base hair cap
+    hair_y = head_y - 4
+    pygame.draw.rect(surf, S_HAIR, (head_x - HEAD_W // 2 - 2, hair_y, HEAD_W + 4, 12), border_radius=3)
+    # messy spiky top
+    spikes = [(-14, 14), (-8, 18), (-2, 16), (4, 20), (10, 15), (15, 12)]
+    for sx, sh in spikes:
+        pts = [
+            (head_x + sx - 4, hair_y + 4),
+            (head_x + sx + 5, hair_y + 4),
+            (head_x + sx + f * 2, hair_y - sh)
+        ]
+        pygame.draw.polygon(surf, S_HAIR, pts)
+        pygame.draw.polygon(surf, S_HAIR_DARK, pts, 1)
+    # side burns / side hair
+    pygame.draw.rect(surf, S_HAIR, (head_x - HEAD_W // 2 - 3, head_y, 6, 18), border_radius=2)
+    pygame.draw.rect(surf, S_HAIR, (head_x + HEAD_W // 2 - 3, head_y, 6, 18), border_radius=2)
+    # back hair tuft (hangs behind)
+    pygame.draw.polygon(surf, S_HAIR, [
+        (head_x - f * 14, head_y + 2),
+        (head_x - f * 18, head_y + 18),
+        (head_x - f * 10, head_y + 14)
+    ])
+
+    # ── ARMS + CLASSIC LINKED SWORD ──
+    shoulder_y = torso_y + 4 + int(walk_bob)
+
+    if action == "slash":
+        progress = min(frame / 12.0, 1.0)
+        angle = -70 + progress * 150
+        rad = math.radians(angle * f)
+        arm_ex = x + f * 18 + math.cos(rad) * 22
+        arm_ey = shoulder_y + math.sin(rad) * 22
+        pygame.draw.line(surf, S_SKIN, (x + f * TORSO_W // 2, shoulder_y), (int(arm_ex), int(arm_ey)), 8)
+        pygame.draw.rect(surf, S_SKIN_SHADE, (int(arm_ex) - 4, int(arm_ey) - 4, 8, 8))
+        _draw_roblox_sword(surf, arm_ex, arm_ey, angle, f,
+                           blade_col=(190, 195, 205), edge_col=WHITE, hilt_col=GOLD)
+        pygame.draw.line(surf, S_SKIN, (x - f * TORSO_W // 2, shoulder_y), (x - f * 20, shoulder_y + 22), 8)
+    elif action == "block":
+        bx = x + f * 28
+        pygame.draw.line(surf, S_SKIN, (x + f * TORSO_W // 2, shoulder_y), (bx, shoulder_y), 8)
+        pygame.draw.rect(surf, S_SKIN_SHADE, (bx - 4, shoulder_y - 4, 8, 8))
+        _draw_roblox_sword(surf, bx, shoulder_y, -90, 1,
+                           blade_col=(190, 195, 205), edge_col=WHITE, hilt_col=GOLD, blade_len=40)
+        # blue shield shimmer
+        shield = pygame.Surface((44, 70), pygame.SRCALPHA)
+        pygame.draw.ellipse(shield, (50, 120, 255, 35), (0, 0, 44, 70))
+        surf.blit(shield, (bx - 22, shoulder_y - 35))
+        pygame.draw.line(surf, S_SKIN, (x - f * TORSO_W // 2, shoulder_y), (x - f * 18, shoulder_y + 20), 8)
+    elif action == "ultra":
+        # ULTRA SLASH – rapid alternating slashes with golden/blue energy trail
+        cycle = (frame % 18) / 18.0
+        angle = -50 + math.sin(cycle * math.pi * 2) * 110
+        rad = math.radians(angle * f)
+        arm_ex = x + f * 20 + math.cos(rad) * 24
+        arm_ey = shoulder_y + math.sin(rad) * 24
+        pygame.draw.line(surf, S_SKIN, (x + f * TORSO_W // 2, shoulder_y), (int(arm_ex), int(arm_ey)), 9)
+        pygame.draw.rect(surf, S_SKIN_SHADE, (int(arm_ex) - 4, int(arm_ey) - 4, 8, 8))
+        _draw_roblox_sword(surf, arm_ex, arm_ey, angle, f,
+                           blade_col=(240, 220, 80), edge_col=WHITE, hilt_col=GOLD, blade_len=50)
+        # golden fire trail
+        for i in range(5):
+            ta = angle - i * 16 * f
+            tr = math.radians(ta * f)
+            tx = arm_ex + math.cos(tr) * (30 + i * 7)
+            ty = arm_ey + math.sin(tr) * (30 + i * 7)
+            ts = pygame.Surface((14, 14), pygame.SRCALPHA)
+            a = max(0, 120 - i * 25)
+            pygame.draw.circle(ts, (255, 200, int(50 + i * 20), a), (7, 7), 7 - i)
+            surf.blit(ts, (int(tx) - 7, int(ty) - 7))
+        # blue-gold aura
+        aura = pygame.Surface((80, 100), pygame.SRCALPHA)
+        ar = int(38 + math.sin(frame * 0.25) * 8)
+        pygame.draw.ellipse(aura, (50, 120, 255, 25), (40 - ar, 50 - ar, ar * 2, ar * 2))
+        pygame.draw.ellipse(aura, (255, 200, 50, 20), (40 - ar + 5, 50 - ar + 5, ar * 2 - 10, ar * 2 - 10))
+        surf.blit(aura, (x - 40, torso_y - 10))
+        pygame.draw.line(surf, S_SKIN, (x - f * TORSO_W // 2, shoulder_y), (x - f * 16, shoulder_y + 18), 8)
+    elif action == "stun_slash":
+        # Stun Slash — electric blue charged swing
+        progress = min(frame / 12.0, 1.0)
+        angle = -80 + progress * 170
+        rad = math.radians(angle * f)
+        arm_ex = x + f * 20 + math.cos(rad) * 24
+        arm_ey = shoulder_y + math.sin(rad) * 24
+        pygame.draw.line(surf, S_SKIN, (x + f * TORSO_W // 2, shoulder_y), (int(arm_ex), int(arm_ey)), 9)
+        _draw_roblox_sword(surf, arm_ex, arm_ey, angle, f,
+                           blade_col=(80, 160, 255), edge_col=WHITE, hilt_col=(50, 100, 220), blade_len=46)
+        # electric arcs
+        for i in range(4):
+            ea = angle + random.randint(-30, 30)
+            er = math.radians(ea * f)
+            ex = arm_ex + math.cos(er) * (20 + i * 8)
+            ey = arm_ey + math.sin(er) * (20 + i * 8)
+            es = pygame.Surface((10, 10), pygame.SRCALPHA)
+            pygame.draw.circle(es, (100, 180, 255, 150 - i * 30), (5, 5), 5 - i)
+            surf.blit(es, (int(ex) - 5, int(ey) - 5))
+        pygame.draw.line(surf, S_SKIN, (x - f * TORSO_W // 2, shoulder_y), (x - f * 18, shoulder_y + 20), 8)
+    elif action == "entangle":
+        # (Shedletsky doesn't use this, but handle gracefully)
+        pygame.draw.line(surf, S_SKIN, (x + f * TORSO_W // 2, shoulder_y), (x + f * 20, shoulder_y + 20), 8)
+        pygame.draw.line(surf, S_SKIN, (x - f * TORSO_W // 2, shoulder_y), (x - f * 18, shoulder_y + 20), 8)
+    else:
+        # idle
+        idle_bob = math.sin(frame * 0.06) * 2
+        aey = shoulder_y + 24 + idle_bob
+        pygame.draw.line(surf, S_SKIN, (x + f * TORSO_W // 2, shoulder_y), (x + f * 20, int(aey)), 8)
+        pygame.draw.rect(surf, S_SKIN_SHADE, (x + f * 20 - 4, int(aey) - 4, 8, 8))
+        _draw_roblox_sword(surf, x + f * 20, aey, 80, f,
+                           blade_col=(190, 195, 205), edge_col=WHITE, hilt_col=GOLD, blade_len=36)
+        pygame.draw.line(surf, S_SKIN, (x - f * TORSO_W // 2, shoulder_y), (x - f * 18, int(aey)), 8)
+
+
+# ─── ADMIN PANEL STATE ───
+admin_unlocked = {"1x1x1x1": False, "Shedletsky": False}
+ADMIN_CODE = "66640"
+
+# ─── ENTANGLEMENT PROJECTILE ───
+entangle_projectiles = []  # {x, y, vx, vy, owner_name, frame, target}
+
+def fire_entangle_projectile(fighter, other):
+    """Fire a purple homing orb from 1x1x1x1 toward the opponent."""
+    f = 1 if fighter.facing == "right" else -1
+    entangle_projectiles.append({
+        "x": fighter.x + f * 30,
+        "y": fighter.y - 40,
+        "vx": f * 8,
+        "vy": 0,
+        "owner_name": fighter.name,
+        "frame": 0,
+        "target": other,
+    })
+
+def update_entangle_projectiles():
+    for proj in entangle_projectiles[:]:
+        proj["frame"] += 1
+        # slight homing toward target
+        tgt = proj["target"]
+        dx = tgt.x - proj["x"]
+        dy = (tgt.y - 40) - proj["y"]
+        dist = math.hypot(dx, dy)
+        if dist > 1:
+            proj["vx"] += (dx / dist) * 0.5
+            proj["vy"] += (dy / dist) * 0.3
+        # speed cap
+        spd = math.hypot(proj["vx"], proj["vy"])
+        if spd > 10:
+            proj["vx"] = proj["vx"] / spd * 10
+            proj["vy"] = proj["vy"] / spd * 10
+        proj["x"] += proj["vx"]
+        proj["y"] += proj["vy"]
+        # hit detection
+        prect = pygame.Rect(int(proj["x"]) - 14, int(proj["y"]) - 14, 28, 28)
+        if prect.colliderect(tgt.rect):
+            if tgt.action == "block" and tgt.block_timer > 0:
+                spawn_sparks(int(proj["x"]), int(proj["y"]), 25)
+                tgt.vel_x = (1 if proj["vx"] > 0 else -1) * 4
+            else:
+                # STUN + popup explosion
+                stun_dur = random.randint(240, 300)  # 4-5 secs
+                tgt.stun_timer = stun_dur
+                tgt.action = "idle"
+                tgt.action_frame = 0
+                tgt.ultra_active = False
+                tgt.take_damage(10)
+                tgt.vel_x = (1 if proj["vx"] > 0 else -1) * 7
+                tgt.shake = 10
+                spawn_ability_effect(tgt.x, tgt.y - 20, DARK_PURPLE, 30)
+                spawn_entangle_impact_popups(int(tgt.x), 18)
+            entangle_projectiles.remove(proj)
+            continue
+        # expire after 3 seconds
+        if proj["frame"] > 180 or proj["x"] < -50 or proj["x"] > WIDTH + 50:
+            entangle_projectiles.remove(proj)
+
+def draw_entangle_projectiles(surf, frame):
+    for proj in entangle_projectiles:
+        px, py = int(proj["x"]), int(proj["y"])
+        pf = proj["frame"]
+        # outer glow
+        gr = int(18 + math.sin(pf * 0.3) * 5)
+        gs = pygame.Surface((gr * 4, gr * 4), pygame.SRCALPHA)
+        pygame.draw.circle(gs, (120, 40, 180, 50), (gr * 2, gr * 2), gr * 2)
+        pygame.draw.circle(gs, (180, 60, 255, 90), (gr * 2, gr * 2), gr)
+        surf.blit(gs, (px - gr * 2, py - gr * 2))
+        # core
+        pygame.draw.circle(surf, (200, 80, 255), (px, py), 8)
+        pygame.draw.circle(surf, (255, 180, 255), (px, py), 4)
+        # trailing sparks
+        for i in range(4):
+            tx = px - proj["vx"] * (i + 1) * 0.6 + random.randint(-3, 3)
+            ty = py - proj["vy"] * (i + 1) * 0.6 + random.randint(-3, 3)
+            a = max(0, 120 - i * 30)
+            ts = pygame.Surface((8, 8), pygame.SRCALPHA)
+            pygame.draw.circle(ts, (160, 40, 200, a), (4, 4), 4 - i)
+            surf.blit(ts, (int(tx) - 4, int(ty) - 4))
+
+# ─── IMPACT POPUPS (visual only, on hit) ───
+entangle_popups = []
+
+POPUP_TEXTS = [
+    "ERROR", "FATAL", "CORRUPTED", "0x1x1x1", "HACKED",
+    "VIRUS", "BREACH", "OVERRIDE", "SYSTEM FAIL", "DELETE",
+    "BANNED", "1x1x1x1", "ENTANGLED", "NO ESCAPE", "DOOMED",
+    "MALWARE", "TROJAN", "GLITCH", "CRASH", "DESTROYED",
+]
+
+POPUP_COLORS = [
+    (200, 30, 30), (180, 0, 60), (220, 50, 0), (150, 0, 0),
+    (255, 50, 50), (200, 0, 80), (160, 20, 20), (100, 0, 0),
+]
+
+def spawn_entangle_impact_popups(target_x, count=18):
+    """Spawn a burst of error popups on impact."""
+    for _ in range(count):
+        pw = random.randint(80, 180)
+        ph = random.randint(30, 60)
+        px = target_x + random.randint(-200, 200)
+        py = random.randint(60, HEIGHT - 120)
+        vx = random.uniform(-2, 2)
+        vy = random.uniform(-1, 1)
+        entangle_popups.append({
+            "x": px, "y": py, "w": pw, "h": ph,
+            "vx": vx, "vy": vy,
+            "life": random.randint(40, 90),
+            "text": random.choice(POPUP_TEXTS),
+            "color": random.choice(POPUP_COLORS),
+        })
+
+def update_entangle_popups():
+    for p in entangle_popups[:]:
+        p["x"] += p["vx"]
+        p["y"] += p["vy"]
+        p["life"] -= 1
+        if p["life"] <= 0:
+            entangle_popups.remove(p)
+
+def draw_entangle_popups(surf, frame):
+    popup_font = pygame.font.SysFont("Consolas", 14, bold=True)
+    title_font = pygame.font.SysFont("Arial", 10)
+    for p in entangle_popups:
+        alpha = min(255, p["life"] * 6)
+        # window border
+        rect = pygame.Rect(int(p["x"]), int(p["y"]), p["w"], p["h"])
+        # title bar
+        tbar = pygame.Rect(rect.x, rect.y, rect.w, 16)
+        ws = pygame.Surface((p["w"], p["h"]), pygame.SRCALPHA)
+        ws.fill((20, 20, 25, min(220, alpha)))
+        pygame.draw.rect(ws, (*p["color"], min(255, alpha)), (0, 0, p["w"], 16))
+        # title text
+        tt = title_font.render("ERROR", True, WHITE)
+        ws.blit(tt, (4, 2))
+        # X button
+        pygame.draw.rect(ws, (180, 40, 40), (p["w"] - 16, 0, 16, 16))
+        xt = title_font.render("X", True, WHITE)
+        ws.blit(xt, (p["w"] - 13, 2))
+        # body text
+        bt = popup_font.render(p["text"], True, p["color"])
+        ws.blit(bt, (p["w"] // 2 - bt.get_width() // 2, p["h"] // 2 - bt.get_height() // 2 + 6))
+        # border
+        pygame.draw.rect(ws, p["color"], (0, 0, p["w"], p["h"]), 2)
+        # glitch flicker
+        if random.random() < 0.1:
+            ws.set_alpha(random.randint(100, 255))
+        else:
+            ws.set_alpha(alpha)
+        surf.blit(ws, (rect.x, rect.y))
+
+
+# ══════════════════════════════════════════════════════════
+#  FIGHTER CLASS  –  Slash / Block / Ultra / Admin abilities
+# ══════════════════════════════════════════════════════════
+
+class Fighter:
+    def __init__(self, name, x, y, facing, is_player, controls):
+        self.name = name
+        self.x = x
+        self.y = y
+        self.facing = facing
+        self.is_player = is_player
+        self.controls = controls
+
+        self.health = 100
+        self.max_health = 100
+
+        self.action = "idle"
+        self.action_frame = 0
+        self.action_duration = 0
+        self.slash_hit = False
+
+        self.vel_x = 0
+        self.vel_y = 0
+        self.on_ground = True
+        self.ground_y = y
+        self.hurt_timer = 0
+        self.block_timer = 0
+
+        # ULTRA SLASH mechanic: land a block → charges ultra
+        self.ultra_charged = False
+        self.ultra_active = False
+        self.ultra_frame = 0
+        self.ultra_hit_cd = 0
+
+        # ADMIN abilities
+        self.admin_cd = 0
+        self.admin_max_cd = 300  # 5 seconds
+        self.entangle_timer = 0  # 1x1x1x1: popups active for this many frames
+        self.stun_timer = 0      # stunned = can't move/act
+
+        # combo
+        self.combo = 0
+        self.combo_timer = 0
+
+        # screen shake contribution
+        self.shake = 0
+
+        if name == "1x1x1x1":
+            self.slash_dmg = 12
+            self.ultra_dmg = 8       # per-hit during ultra (rapid)
+            self.speed = 4.5
+        else:
+            self.slash_dmg = 10
+            self.ultra_dmg = 7
+            self.speed = 4.0
+
+    @property
+    def rect(self):
+        return pygame.Rect(self.x - 20, self.y - 70, 40, 104)
+
+    @property
+    def attack_rect(self):
+        f = 1 if self.facing == "right" else -1
+        return pygame.Rect(self.x + f * 10, self.y - 50, f * 55, 65)
+
+    def start_action(self, action, duration):
+        if self.stun_timer > 0:
+            return False  # stunned
+        if self.ultra_active:
+            return False
+        if self.action != "idle" and self.action != "walk":
+            return False
+        self.action = action
+        self.action_frame = 0
+        self.action_duration = duration
+        self.slash_hit = False
+        return True
+
+    def activate_ultra(self):
+        if self.stun_timer > 0:
+            return False
+        if not self.ultra_charged or self.ultra_active:
+            return False
+        if self.action not in ("idle", "walk"):
+            return False
+        self.ultra_charged = False
+        self.ultra_active = True
+        self.ultra_frame = 0
+        self.ultra_hit_cd = 0
+        self.action = "ultra"
+        self.action_frame = 0
+        self.action_duration = 9999  # runs until block
+        return True
+
+    def activate_admin(self, other):
+        """Admin ability: 1x1x1x1 = Entanglement, Shedletsky = Stun Slash."""
+        if self.stun_timer > 0 or self.admin_cd > 0:
+            return False
+        if not admin_unlocked.get(self.name, False):
+            return False
+        if self.action not in ("idle", "walk"):
+            return False
+
+        self.admin_cd = self.admin_max_cd
+
+        if self.name == "1x1x1x1":
+            # ENTANGLEMENT — fire a homing projectile that stuns
+            self.action = "entangle"
+            self.action_frame = 0
+            self.action_duration = 20  # cast animation
+            fire_entangle_projectile(self, other)
+            spawn_ability_effect(self.x, self.y - 30, DARK_PURPLE, 20)
+            return True
+        else:
+            # STUN SLASH — slash that stuns for 4-5 seconds (240-300 frames)
+            self.action = "stun_slash"
+            self.action_frame = 0
+            self.action_duration = 18
+            self.slash_hit = False
+            return True
+
+    def update(self, other):
+        # timers
+        if self.hurt_timer > 0:
+            self.hurt_timer -= 1
+        if self.block_timer > 0:
+            self.block_timer -= 1
+        if self.combo_timer > 0:
+            self.combo_timer -= 1
+        else:
+            self.combo = 0
+        if self.shake > 0:
+            self.shake -= 1
+        if self.admin_cd > 0:
+            self.admin_cd -= 1
+
+        # stun countdown
+        if self.stun_timer > 0:
+            self.stun_timer -= 1
+            if self.stun_timer == 0:
+                self.action = "idle"
+                self.action_frame = 0
+            # can't do anything while stunned
+            # still apply gravity/velocity below
+            if not self.on_ground:
+                self.vel_y += 0.6
+                self.y += self.vel_y
+                if self.y >= self.ground_y:
+                    self.y = self.ground_y
+                    self.vel_y = 0
+                    self.on_ground = True
+            self.x += self.vel_x
+            self.vel_x *= 0.85
+            self.x = max(30, min(WIDTH - 30, self.x))
+            return
+
+        # (entanglement is now projectile-based, handled externally)
+
+        # ── ULTRA SLASH continuous hits ──
+        if self.ultra_active:
+            self.ultra_frame += 1
+            self.action_frame = self.ultra_frame
+            if self.ultra_hit_cd > 0:
+                self.ultra_hit_cd -= 1
+
+            # rapid hit every 10 frames
+            if self.ultra_hit_cd == 0:
+                atk = self.attack_rect
+                atk_n = pygame.Rect(min(atk.left, atk.right), atk.top, abs(atk.width), atk.height)
+                if atk_n.colliderect(other.rect):
+                    if other.action == "block" and other.block_timer > 0:
+                        # BLOCKED — ultra ends, blocker gets THEIR ultra charge
+                        clash_x = (self.x + other.x) // 2
+                        spawn_sparks(clash_x, self.y - 30, 40)
+                        self.ultra_active = False
+                        self.action = "idle"
+                        self.action_frame = 0
+                        other.ultra_charged = True
+                        other.shake = 8
+                        f = 1 if self.facing == "right" else -1
+                        self.vel_x = -f * 7
+                        other.vel_x = f * 3
+                    else:
+                        other.take_damage(self.ultra_dmg)
+                        self.combo += 1
+                        self.combo_timer = 90
+                        f = 1 if self.facing == "right" else -1
+                        other.vel_x = f * 3
+                        self.ultra_hit_cd = 10
+                        other.shake = 4
+                        col = RED if self.name == "1x1x1x1" else GOLD
+                        spawn_hit_effect(other.x, other.y - 20, col, 8)
+                        spawn_sparks(other.x + random.randint(-10, 10),
+                                     other.y - 30 + random.randint(-10, 10), 6)
+
+            # auto-chase during ultra
+            f = 1 if other.x > self.x else -1
+            dist = abs(self.x - other.x)
+            if dist > 40:
+                self.x += f * self.speed * 1.2
+            self.facing = "right" if other.x > self.x else "left"
+
+        # ── Normal action progression ──
+        elif self.action not in ("idle", "walk"):
+            self.action_frame += 1
+
+            # normal slash hit
+            if self.action == "slash" and 4 <= self.action_frame <= 8 and not self.slash_hit:
+                atk = self.attack_rect
+                atk_n = pygame.Rect(min(atk.left, atk.right), atk.top, abs(atk.width), atk.height)
+                if atk_n.colliderect(other.rect):
+                    self.slash_hit = True
+                    if other.action == "block" and other.block_timer > 0:
+                        # BLOCKED — blocker earns ultra charge!
+                        clash_x = (self.x + other.x) // 2
+                        spawn_sparks(clash_x, self.y - 30, 30)
+                        other.ultra_charged = True
+                        f = 1 if self.facing == "right" else -1
+                        other.vel_x = f * 3
+                        self.vel_x = -f * 3
+                        other.shake = 6
+                    else:
+                        dmg = self.slash_dmg + self.combo * 2
+                        other.take_damage(dmg)
+                        self.combo += 1
+                        self.combo_timer = 60
+                        f = 1 if self.facing == "right" else -1
+                        other.vel_x = f * 6
+                        other.shake = 5
+                        spawn_hit_effect(other.x, other.y - 20,
+                                         RED if self.name == "1x1x1x1" else BLUE)
+
+            # stun slash hit (Shedletsky admin)
+            if self.action == "stun_slash" and 5 <= self.action_frame <= 10 and not self.slash_hit:
+                atk = self.attack_rect
+                atk_n = pygame.Rect(min(atk.left, atk.right), atk.top, abs(atk.width), atk.height)
+                if atk_n.colliderect(other.rect):
+                    self.slash_hit = True
+                    if other.action == "block" and other.block_timer > 0:
+                        spawn_sparks((self.x + other.x) // 2, self.y - 30, 30)
+                        f = 1 if self.facing == "right" else -1
+                        other.vel_x = f * 4
+                        self.vel_x = -f * 3
+                    else:
+                        # STUN! 4-5 seconds
+                        stun_dur = random.randint(240, 300)
+                        other.stun_timer = stun_dur
+                        other.action = "idle"
+                        other.action_frame = 0
+                        other.ultra_active = False
+                        other.take_damage(8)
+                        f = 1 if self.facing == "right" else -1
+                        other.vel_x = f * 8
+                        other.shake = 10
+                        spawn_ability_effect(other.x, other.y - 20, BLUE, 20)
+                        spawn_sparks(other.x, other.y - 30, 20)
+
+            if self.action_frame >= self.action_duration:
+                self.action = "idle"
+                self.action_frame = 0
+
+        # gravity
+        if not self.on_ground:
+            self.vel_y += 0.6
+            self.y += self.vel_y
+            if self.y >= self.ground_y:
+                self.y = self.ground_y
+                self.vel_y = 0
+                self.on_ground = True
+
+        # velocity / friction
+        self.x += self.vel_x
+        self.vel_x *= 0.85
+        self.x = max(30, min(WIDTH - 30, self.x))
+
+    def take_damage(self, dmg):
+        self.health = max(0, self.health - dmg)
+        self.hurt_timer = 12
+
+    def draw(self, surf, frame):
+        if self.hurt_timer > 0 and self.hurt_timer % 4 < 2:
+            return
+        hp = self.health / self.max_health
+        act = self.action
+        af = self.action_frame if self.action != "idle" else frame
+
+        # stunned visual — draw character with blue tint overlay
+        if self.name == "1x1x1x1":
+            draw_1x1x1x1(surf, int(self.x), int(self.y), self.facing, act, af, hp)
+        else:
+            draw_shedletsky(surf, int(self.x), int(self.y), self.facing, act, af, hp)
+
+        if self.stun_timer > 0:
+            # stun overlay: blue electric sparks + "STUNNED" text
+            stun_surf = pygame.Surface((60, 90), pygame.SRCALPHA)
+            stun_a = int(80 + math.sin(frame * 0.3) * 40)
+            stun_surf.fill((50, 100, 255, stun_a))
+            surf.blit(stun_surf, (int(self.x) - 30, int(self.y) - 75))
+            # electric sparks
+            for _ in range(3):
+                ex = int(self.x) + random.randint(-20, 20)
+                ey = int(self.y) - random.randint(10, 60)
+                pygame.draw.circle(surf, (100, 180, 255), (ex, ey), random.randint(2, 5))
+            # text
+            st = font_tiny.render("STUNNED", True, (100, 180, 255))
+            surf.blit(st, (int(self.x) - st.get_width() // 2, int(self.y) - 85))
+
+
+# ══════════════════════════════════════════════════════════
+#  AI OPPONENT  –  slash / block / ultra only
+# ══════════════════════════════════════════════════════════
+
+def ai_update(fighter, opponent, difficulty=0.6):
+    dist = abs(fighter.x - opponent.x)
+    f = 1 if opponent.x > fighter.x else -1
+    fighter.facing = "right" if f == 1 else "left"
+
+    if fighter.stun_timer > 0:
+        return  # stunned, can't do anything
+
+    if fighter.ultra_active:
+        return
+
+    if fighter.action not in ("idle", "walk"):
+        return
+
+    # use admin ability if available
+    if admin_unlocked.get(fighter.name, False) and fighter.admin_cd == 0 and dist < 100:
+        if random.random() < 0.02 * difficulty:
+            fighter.activate_admin(opponent)
+            return
+
+    # use ultra if charged and close-ish
+    if fighter.ultra_charged and dist < 120 and random.random() < 0.06 * difficulty:
+        fighter.activate_ultra()
+        return
+
+    # react to opponent slash — try to block
+    if opponent.action == "slash" and dist < 85 and random.random() < difficulty * 0.85:
+        if fighter.start_action("block", 22):
+            fighter.block_timer = 22
+        return
+
+    # react to opponent ultra — MUST block
+    if opponent.ultra_active and dist < 100 and random.random() < difficulty * 0.9:
+        if fighter.start_action("block", 25):
+            fighter.block_timer = 25
+        return
+
+    # attack at close range
+    if dist < 70:
+        r = random.random()
+        if r < 0.05 * difficulty:
+            fighter.start_action("slash", 15)
+        return
+
+    # occasional jump
+    if fighter.on_ground and random.random() < 0.012 * difficulty:
+        fighter.vel_y = -12
+        fighter.on_ground = False
+
+    # approach aggressively
+    if dist > 55:
+        fighter.x += f * fighter.speed * 0.7
+        fighter.action = "walk"
+    else:
+        fighter.action = "idle"
+
+
+# ══════════════════════════════════════════════════════════
+#  HUD  –  intense final-battle style
+# ══════════════════════════════════════════════════════════
+
+def draw_hud(surf, p1, p2, frame):
+    bar_w, bar_h = 340, 24
+
+    # ── P1 health (left) ──
+    pygame.draw.rect(surf, (20, 20, 20), (36, 16, bar_w + 8, bar_h + 8), border_radius=5)
+    pygame.draw.rect(surf, DARK_GRAY, (40, 20, bar_w, bar_h), border_radius=4)
+    hw = int(bar_w * max(0, p1.health / p1.max_health))
+    col1 = RED if p1.name == "1x1x1x1" else BLUE
+    if p1.health < 25:
+        col1 = (col1[0], max(0, col1[1] - 40), max(0, col1[2] - 40))  # darker when low
+    pygame.draw.rect(surf, col1, (40, 20, hw, bar_h), border_radius=4)
+    # health glow at low HP
+    if p1.health < 30:
+        pulse = abs(math.sin(frame * 0.1)) * 80
+        g = pygame.Surface((hw, bar_h), pygame.SRCALPHA)
+        g.fill((255, 0, 0, int(pulse)))
+        surf.blit(g, (40, 20))
+    pygame.draw.rect(surf, WHITE, (40, 20, bar_w, bar_h), 2, border_radius=4)
+    hp1 = font_tiny.render(f"{max(0, int(p1.health))}/{p1.max_health}", True, WHITE)
+    surf.blit(hp1, (40 + bar_w // 2 - hp1.get_width() // 2, 22))
+
+    # name + role
+    n1 = font_hud.render(p1.name, True, WHITE)
+    role1 = font_tiny.render("THE CREATION" if p1.name == "1x1x1x1" else "THE CREATOR", True, col1)
+    surf.blit(n1, (40, 46))
+    surf.blit(role1, (40, 66))
+
+    # ── P2 health (right) ──
+    p2_x = WIDTH - 40 - bar_w
+    pygame.draw.rect(surf, (20, 20, 20), (p2_x - 4, 16, bar_w + 8, bar_h + 8), border_radius=5)
+    pygame.draw.rect(surf, DARK_GRAY, (p2_x, 20, bar_w, bar_h), border_radius=4)
+    hw2 = int(bar_w * max(0, p2.health / p2.max_health))
+    col2 = RED if p2.name == "1x1x1x1" else BLUE
+    if p2.health < 25:
+        col2 = (col2[0], max(0, col2[1] - 40), max(0, col2[2] - 40))
+    pygame.draw.rect(surf, col2, (p2_x + bar_w - hw2, 20, hw2, bar_h), border_radius=4)
+    if p2.health < 30:
+        pulse = abs(math.sin(frame * 0.1)) * 80
+        g = pygame.Surface((hw2, bar_h), pygame.SRCALPHA)
+        g.fill((255, 0, 0, int(pulse)))
+        surf.blit(g, (p2_x + bar_w - hw2, 20))
+    pygame.draw.rect(surf, WHITE, (p2_x, 20, bar_w, bar_h), 2, border_radius=4)
+    hp2 = font_tiny.render(f"{max(0, int(p2.health))}/{p2.max_health}", True, WHITE)
+    surf.blit(hp2, (p2_x + bar_w // 2 - hp2.get_width() // 2, 22))
+
+    n2 = font_hud.render(p2.name, True, WHITE)
+    role2 = font_tiny.render("THE CREATION" if p2.name == "1x1x1x1" else "THE CREATOR", True, col2)
+    surf.blit(n2, (p2_x + bar_w - n2.get_width(), 46))
+    surf.blit(role2, (p2_x + bar_w - role2.get_width(), 66))
+
+    # ── ULTRA CHARGE indicators ──
+    # P1 ultra
+    ultra_y = 84
+    if p1.ultra_active:
+        ut = font_small.render(">>> ULTRA SLASH <<<", True, GOLD)
+        pulse_a = int(180 + math.sin(frame * 0.3) * 75)
+        ut.set_alpha(pulse_a)
+        surf.blit(ut, (40, ultra_y))
+    elif p1.ultra_charged:
+        ut = font_small.render("[3] ULTRA READY!", True, GOLD)
+        pulse_a = int(180 + math.sin(frame * 0.2) * 75)
+        ut.set_alpha(pulse_a)
+        surf.blit(ut, (40, ultra_y))
+        # glow box
+        ug = pygame.Surface((ut.get_width() + 10, ut.get_height() + 6), pygame.SRCALPHA)
+        pygame.draw.rect(ug, (*GOLD, 30), (0, 0, ug.get_width(), ug.get_height()), border_radius=4)
+        surf.blit(ug, (35, ultra_y - 3))
+    else:
+        ut = font_tiny.render("Block an attack to charge Ultra", True, (80, 80, 80))
+        surf.blit(ut, (40, ultra_y + 4))
+
+    # P2 ultra
+    if p2.ultra_active:
+        ut2 = font_small.render(">>> ULTRA SLASH <<<", True, GOLD)
+        ut2.set_alpha(int(180 + math.sin(frame * 0.3) * 75))
+        surf.blit(ut2, (WIDTH - 40 - ut2.get_width(), ultra_y))
+    elif p2.ultra_charged:
+        ut2 = font_small.render("ULTRA READY!", True, GOLD)
+        ut2.set_alpha(int(180 + math.sin(frame * 0.2) * 75))
+        surf.blit(ut2, (WIDTH - 40 - ut2.get_width(), ultra_y))
+
+    # ── COMBO display ──
+    if p1.combo > 1:
+        ct = font_med.render(f"{p1.combo}x COMBO!", True, ORANGE)
+        ct.set_alpha(220)
+        surf.blit(ct, (40, 112))
+    if p2.combo > 1:
+        ct2 = font_med.render(f"{p2.combo}x COMBO!", True, ORANGE)
+        ct2.set_alpha(220)
+        surf.blit(ct2, (WIDTH - 40 - ct2.get_width(), 112))
+
+    # ── ADMIN ability indicator (P1) ──
+    admin_y = 106 if p1.combo <= 1 else 145
+    if admin_unlocked.get(p1.name, False):
+        if p1.admin_cd == 0:
+            aname = "ENTANGLEMENT" if p1.name == "1x1x1x1" else "STUN SLASH"
+            at = font_tiny.render(f"[4] {aname} READY", True, PURPLE)
+            surf.blit(at, (40, admin_y))
+        else:
+            secs = p1.admin_cd // 60 + 1
+            at = font_tiny.render(f"[4] Admin {secs}s", True, GRAY)
+            surf.blit(at, (40, admin_y))
+
+    # ── VS / FINALE text ──
+    vs = font_big.render("VS", True, (200, 50, 50))
+    surf.blit(vs, (WIDTH // 2 - vs.get_width() // 2, 6))
+    sub = font_tiny.render("CREATOR  vs  CREATION  ─  THE FINAL BATTLE", True, (120, 60, 60))
+    surf.blit(sub, (WIDTH // 2 - sub.get_width() // 2, 58))
+
+
+# ══════════════════════════════════════════════════════════
+#  ARENA  –  intense final-battle atmosphere
+# ══════════════════════════════════════════════════════════
+
+def draw_arena(surf, frame, intensity=0.0):
+    """intensity 0-1 ramps up red/dark as someone gets low HP."""
+    ri = intensity  # 0 = calm, 1 = someone near death
+
+    for y in range(HEIGHT):
+        t = y / HEIGHT
+        r = int((12 + ri * 30) + t * (25 + ri * 20))
+        g = int((6 - ri * 4) + t * (14 - ri * 8))
+        b = int((30 - ri * 15) + t * (45 - ri * 20))
+        r = max(0, min(255, r))
+        g = max(0, min(255, g))
+        b = max(0, min(255, b))
+        pygame.draw.line(surf, (r, g, b), (0, y), (WIDTH, y))
+
+    ground_top = HEIGHT - 70
+
+    # buildings (darken with intensity)
+    for i, (bx, bw, bh) in enumerate([
+        (50, 60, 140), (160, 45, 100), (270, 70, 170), (400, 50, 120),
+        (520, 80, 155), (650, 40, 90), (740, 65, 130), (870, 55, 110)
+    ]):
+        shade = int(18 + (i % 3) * 4 - ri * 8)
+        shade = max(5, shade)
+        pygame.draw.rect(surf, (shade, shade, shade + 5),
+                         (bx, ground_top - bh, bw, bh))
+        for wy in range(ground_top - bh + 12, ground_top - 10, 18):
+            for wx in range(bx + 8, bx + bw - 8, 14):
+                lit = ((wx + wy + frame // 90) % 5) != 0
+                # windows flicker red when intense
+                if lit:
+                    wr = int(55 + ri * 60)
+                    wg = int(50 - ri * 30)
+                    wb = int(25 - ri * 15)
+                else:
+                    wr, wg, wb = 12, 12, 16
+                pygame.draw.rect(surf, (max(0, wr), max(0, wg), max(0, wb)), (wx, wy, 6, 8))
+
+    # ground
+    gr = int(40 + ri * 20)
+    gg = int(38 - ri * 10)
+    gb = int(50 - ri * 10)
+    pygame.draw.rect(surf, (max(0, gr), max(0, gg), max(0, gb)), (0, ground_top, WIDTH, 70))
+    edge_r = int(80 + ri * 50)
+    pygame.draw.line(surf, (min(255, edge_r), 75, int(90 - ri * 30)), (0, ground_top), (WIDTH, ground_top), 3)
+
+    for i in range(0, WIDTH, 50):
+        pygame.draw.line(surf, (int(50 + ri * 15), int(48 - ri * 10), int(60 - ri * 10)),
+                         (i, ground_top + 2), (i, ground_top + 70), 1)
+
+    # atmospheric embers when intense
+    for i in range(int(8 + ri * 16)):
+        speed = 0.3 + ri * 0.8
+        px = (i * 137 + frame * speed) % WIDTH
+        py = 40 + math.sin(frame * 0.012 + i) * 100 + i * 8
+        py = py % (ground_top - 20)
+        alpha = 30 + ri * 60 + math.sin(frame * 0.03 + i) * 20
+        size = 2 + ri * 2
+        dot = pygame.Surface((int(size * 3), int(size * 3)), pygame.SRCALPHA)
+        cr = int(200 + ri * 55)
+        cg = int(160 - ri * 80)
+        cb = int(200 - ri * 160)
+        pygame.draw.circle(dot, (min(255, cr), max(0, cg), max(0, cb), int(max(0, min(255, alpha)))),
+                           (int(size * 1.5), int(size * 1.5)), int(size))
+        surf.blit(dot, (int(px), int(py)))
+
+
+# ══════════════════════════════════════════════════════════
+#  ADMIN PANEL SCREEN
+# ══════════════════════════════════════════════════════════
+
+def admin_panel():
+    """Code entry screen. Enter 66640 to unlock admin abilities."""
+    code_input = ""
+    message = ""
+    msg_timer = 0
+    frame = 0
+
+    while True:
+        frame += 1
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    return
+                elif event.key == pygame.K_BACKSPACE:
+                    code_input = code_input[:-1]
+                elif event.key == pygame.K_RETURN:
+                    if code_input == ADMIN_CODE:
+                        admin_unlocked["1x1x1x1"] = True
+                        admin_unlocked["Shedletsky"] = True
+                        message = "ADMIN UNLOCKED — ALL ABILITIES ACTIVE"
+                        msg_timer = 120
+                    else:
+                        message = "WRONG CODE"
+                        msg_timer = 60
+                    code_input = ""
+                elif event.unicode.isdigit() and len(code_input) < 10:
+                    code_input += event.unicode
+
+        if msg_timer > 0:
+            msg_timer -= 1
+
+        # draw
+        screen.fill((10, 8, 15))
+
+        # glitch scanlines
+        for y in range(0, HEIGHT, 4):
+            if random.random() < 0.3:
+                pygame.draw.line(screen, (20, 15, 25), (0, y), (WIDTH, y))
+
+        # title
+        t1 = font_big.render("ADMIN PANEL", True, (200, 50, 50))
+        screen.blit(t1, (WIDTH // 2 - t1.get_width() // 2, 60))
+
+        t2 = font_small.render("Enter access code:", True, GRAY)
+        screen.blit(t2, (WIDTH // 2 - t2.get_width() // 2, 150))
+
+        # code display (masked with dots, showing last digit)
+        display = "*" * max(0, len(code_input) - 1) + code_input[-1:] if code_input else ""
+        box_w, box_h = 300, 60
+        box_x = WIDTH // 2 - box_w // 2
+        box_y = 200
+        pygame.draw.rect(screen, (25, 25, 35), (box_x, box_y, box_w, box_h), border_radius=6)
+        pygame.draw.rect(screen, (100, 50, 50), (box_x, box_y, box_w, box_h), 2, border_radius=6)
+        cursor_blink = "|" if (frame // 30) % 2 == 0 else ""
+        code_txt = font_med.render(display + cursor_blink, True, WHITE)
+        screen.blit(code_txt, (box_x + box_w // 2 - code_txt.get_width() // 2,
+                               box_y + box_h // 2 - code_txt.get_height() // 2))
+
+        # message
+        if msg_timer > 0 and message:
+            mcol = GREEN if "UNLOCKED" in message else RED
+            mt = font_med.render(message, True, mcol)
+            mt.set_alpha(min(255, msg_timer * 6))
+            screen.blit(mt, (WIDTH // 2 - mt.get_width() // 2, 290))
+
+        # status
+        status_y = 360
+        for name in ["1x1x1x1", "Shedletsky"]:
+            unlocked = admin_unlocked[name]
+            col = GREEN if unlocked else (60, 60, 60)
+            sym = "UNLOCKED" if unlocked else "LOCKED"
+            aname = "Entanglement" if name == "1x1x1x1" else "Stun Slash"
+            st = font_small.render(f"{name}: {aname} [{sym}]", True, col)
+            screen.blit(st, (WIDTH // 2 - st.get_width() // 2, status_y))
+            status_y += 35
+
+        # info
+        info = font_tiny.render("Type code + ENTER  |  ESC to go back", True, (80, 80, 80))
+        screen.blit(info, (WIDTH // 2 - info.get_width() // 2, HEIGHT - 40))
+
+        pygame.display.flip()
+        clock.tick(60)
+
+
+# ══════════════════════════════════════════════════════════
+#  MODE SELECT  –  vs AI  or  vs Friend (local multiplayer)
+# ══════════════════════════════════════════════════════════
+
+def mode_select():
+    """Returns 'ai' or 'multi'."""
+    selected = 0
+    frame = 0
+
+    while True:
+        frame += 1
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_UP:
+                    selected = 0
+                elif event.key == pygame.K_DOWN:
+                    selected = 1
+                elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    return "ai" if selected == 0 else "multi"
+                elif event.key == pygame.K_ESCAPE:
+                    return None
+
+        screen.fill((10, 8, 18))
+
+        title = font_big.render("SELECT MODE", True, WHITE)
+        screen.blit(title, (WIDTH // 2 - title.get_width() // 2, 60))
+
+        options = [
+            ("VS  COMPUTER", "Fight the AI opponent"),
+            ("VS  FRIEND", "Local multiplayer — 2 players, 1 keyboard"),
+        ]
+        for i, (label, desc) in enumerate(options):
+            yy = 200 + i * 100
+            col = GOLD if selected == i else GRAY
+            box = pygame.Rect(WIDTH // 2 - 200, yy - 10, 400, 70)
+            pygame.draw.rect(screen, (25, 25, 35), box, border_radius=8)
+            pygame.draw.rect(screen, col, box, 3, border_radius=8)
+            if selected == i:
+                glow = pygame.Surface((410, 80), pygame.SRCALPHA)
+                pygame.draw.rect(glow, (*GOLD, 20), (0, 0, 410, 80), border_radius=10)
+                screen.blit(glow, (WIDTH // 2 - 205, yy - 15))
+            lt = font_med.render(label, True, col)
+            screen.blit(lt, (WIDTH // 2 - lt.get_width() // 2, yy))
+            dt = font_tiny.render(desc, True, (150, 150, 150))
+            screen.blit(dt, (WIDTH // 2 - dt.get_width() // 2, yy + 38))
+
+        info = font_tiny.render("↑/↓ Select  |  ENTER to confirm  |  ESC back", True, (80, 80, 80))
+        screen.blit(info, (WIDTH // 2 - info.get_width() // 2, HEIGHT - 40))
+
+        pygame.display.flip()
+        clock.tick(60)
+
+
+# ══════════════════════════════════════════════════════════
+#  CHARACTER SELECT SCREEN
+# ══════════════════════════════════════════════════════════
+
+def character_select():
+    selected = 0  # 0 = 1x1x1x1, 1 = Shedletsky
+    frame = 0
+
+    while True:
+        frame += 1
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_LEFT:
+                    selected = 0
+                elif event.key == pygame.K_RIGHT:
+                    selected = 1
+                elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    return "1x1x1x1" if selected == 0 else "Shedletsky"
+                elif event.key == pygame.K_TAB:
+                    admin_panel()
+                elif event.key == pygame.K_ESCAPE:
+                    pygame.quit()
+                    sys.exit()
+
+        # draw
+        draw_arena(screen, frame)
+
+        # title
+        title = font_big.render("CHOOSE YOUR FIGHTER", True, WHITE)
+        screen.blit(title, (WIDTH // 2 - title.get_width() // 2, 30))
+
+        # character panels
+        for i, (name, draw_func) in enumerate([(("1x1x1x1"), draw_1x1x1x1), ("Shedletsky", draw_shedletsky)]):
+            px = WIDTH // 4 + i * WIDTH // 2
+            py = HEIGHT // 2 + 40
+
+            # selection box
+            box = pygame.Rect(px - 100, py - 100, 200, 200)
+            border_col = GOLD if selected == i else GRAY
+            pygame.draw.rect(screen, (30, 30, 40), box, border_radius=8)
+            pygame.draw.rect(screen, border_col, box, 3, border_radius=8)
+            if selected == i:
+                glow = pygame.Surface((210, 210), pygame.SRCALPHA)
+                pygame.draw.rect(glow, (*GOLD, 25), (0, 0, 210, 210), border_radius=10)
+                screen.blit(glow, (px - 105, py - 105))
+
+            # draw character
+            draw_func(screen, px, py + 30, "right", "idle", frame, 1.0)
+
+            # name label
+            nlabel = font_med.render(name, True, WHITE)
+            screen.blit(nlabel, (px - nlabel.get_width() // 2, py + 70))
+
+        # abilities info
+        info_y = HEIGHT - 130
+        if selected == 0:
+            abilities = [
+                "[1] Slash  |  [2] Block  |  [3] Ultra Slash",
+                "[4] ENTANGLEMENT (admin only)" if admin_unlocked["1x1x1x1"] else ""
+            ]
+            desc = "THE CREATION — born from hatred, one glowing red eye."
+        else:
+            abilities = [
+                "[1] Slash  |  [2] Block  |  [3] Ultra Slash",
+                "[4] STUN SLASH (admin only)" if admin_unlocked["Shedletsky"] else ""
+            ]
+            desc = "THE CREATOR — legendary swordsman, creator of worlds."
+
+        desc_txt = font_small.render(desc, True, (200, 200, 200))
+        screen.blit(desc_txt, (WIDTH // 2 - desc_txt.get_width() // 2, info_y))
+        for j, ab in enumerate(abilities):
+            if ab:
+                ab_col = PURPLE if "admin" in ab else YELLOW
+                ab_txt = font_tiny.render(ab, True, ab_col)
+                screen.blit(ab_txt, (WIDTH // 2 - ab_txt.get_width() // 2, info_y + 28 + j * 22))
+
+        # instructions
+        inst = font_tiny.render("←/→ Select  |  ENTER confirm  |  TAB Admin Panel", True, GRAY)
+        screen.blit(inst, (WIDTH // 2 - inst.get_width() // 2, HEIGHT - 30))
+
+        pygame.display.flip()
+        clock.tick(60)
+
+
+# ══════════════════════════════════════════════════════════
+#  MAIN GAME LOOP  –  supports AI and local multiplayer
+# ══════════════════════════════════════════════════════════
+
+def game_loop(player_char, mode="ai"):
+    """mode='ai' for vs computer, mode='multi' for local 2P."""
+    ground_y = HEIGHT - 70
+
+    if player_char == "1x1x1x1":
+        opponent_char = "Shedletsky"
+    else:
+        opponent_char = "1x1x1x1"
+
+    p1 = Fighter(player_char, 200, ground_y - 34, "right", True, {})
+    p2 = Fighter(opponent_char, WIDTH - 200, ground_y - 34, "left", mode == "multi", {})
+
+    is_multi = (mode == "multi")
+
+    frame = 0
+    game_over = False
+    winner = None
+    game_over_timer = 0
+    round_text_timer = 120
+    particles.clear()
+    entangle_popups.clear()
+    entangle_projectiles.clear()
+
+    while True:
+        frame += 1
+        clock.tick(60)
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    return "menu"
+                if game_over and event.key == pygame.K_RETURN:
+                    return "restart"
+
+                if not game_over and round_text_timer <= 0:
+                    # ── P1 controls (arrow keys + 1234) ──
+                    if p1.stun_timer <= 0:
+                        if event.key == pygame.K_1:
+                            p1.start_action("slash", 15)
+                        elif event.key == pygame.K_2:
+                            if p1.start_action("block", 22):
+                                p1.block_timer = 22
+                        elif event.key == pygame.K_3:
+                            p1.activate_ultra()
+                        elif event.key == pygame.K_4:
+                            p1.activate_admin(p2)
+
+                    # ── P2 controls (WASD + QERF) — only in multiplayer ──
+                    if is_multi and p2.stun_timer <= 0:
+                        if event.key == pygame.K_q:
+                            p2.start_action("slash", 15)
+                        elif event.key == pygame.K_e:
+                            if p2.start_action("block", 22):
+                                p2.block_timer = 22
+                        elif event.key == pygame.K_r:
+                            p2.activate_ultra()
+                        elif event.key == pygame.K_f:
+                            p2.activate_admin(p1)
+
+        if not game_over and round_text_timer <= 0:
+            keys = pygame.key.get_pressed()
+
+            # ── P1 movement (arrow keys) ──
+            if p1.stun_timer <= 0 and p1.action in ("idle", "walk") and not p1.ultra_active:
+                if keys[pygame.K_LEFT]:
+                    p1.x -= p1.speed
+                    p1.action = "walk"
+                elif keys[pygame.K_RIGHT]:
+                    p1.x += p1.speed
+                    p1.action = "walk"
+                elif p1.action == "walk":
+                    p1.action = "idle"
+            if keys[pygame.K_UP] and p1.on_ground and p1.stun_timer <= 0:
+                p1.vel_y = -12
+                p1.on_ground = False
+
+            # ── P2 movement ──
+            if is_multi:
+                if p2.stun_timer <= 0 and p2.action in ("idle", "walk") and not p2.ultra_active:
+                    if keys[pygame.K_a]:
+                        p2.x -= p2.speed
+                        p2.action = "walk"
+                    elif keys[pygame.K_d]:
+                        p2.x += p2.speed
+                        p2.action = "walk"
+                    elif p2.action == "walk":
+                        p2.action = "idle"
+                if keys[pygame.K_w] and p2.on_ground and p2.stun_timer <= 0:
+                    p2.vel_y = -12
+                    p2.on_ground = False
+            else:
+                # AI controls P2
+                ai_update(p2, p1, difficulty=0.7)
+
+            # face opponent
+            if p1.action in ("idle", "walk") and p1.stun_timer <= 0:
+                p1.facing = "right" if p2.x > p1.x else "left"
+            if p2.action in ("idle", "walk") and p2.stun_timer <= 0:
+                p2.facing = "right" if p1.x > p2.x else "left"
+
+            # update fighters
+            p1.update(p2)
+            p2.update(p1)
+
+            # update entangle popups + projectiles
+            update_entangle_popups()
+            update_entangle_projectiles()
+
+            # check win
+            if p1.health <= 0:
+                game_over = True
+                winner = p2.name
+            elif p2.health <= 0:
+                game_over = True
+                winner = p1.name
+
+        if round_text_timer > 0:
+            round_text_timer -= 1
+
+        if game_over:
+            game_over_timer += 1
+
+        update_particles()
+
+        # intensity
+        lowest_hp = min(p1.health, p2.health) / 100.0
+        intensity = max(0.0, 1.0 - lowest_hp)
+
+        # screen shake
+        shake_amt = max(p1.shake, p2.shake)
+        sx = random.randint(-shake_amt, shake_amt) if shake_amt > 0 else 0
+        sy = random.randint(-shake_amt, shake_amt) if shake_amt > 0 else 0
+
+        # ── DRAW ──
+        draw_arena(screen, frame, intensity)
+
+        # draw fighters with shake offset
+        back = p1 if p1.x < p2.x else p2
+        front = p2 if p1.x < p2.x else p1
+        back.x += sx; back.y += sy
+        back.draw(screen, frame)
+        back.x -= sx; back.y -= sy
+        front.x += sx; front.y += sy
+        front.draw(screen, frame)
+        front.x -= sx; front.y -= sy
+
+        draw_particles(screen)
+        draw_entangle_projectiles(screen, frame)
+        draw_entangle_popups(screen, frame)
+        draw_hud(screen, p1, p2, frame)
+
+        # controls reminder
+        if is_multi:
+            c1 = font_tiny.render("P1: ←/→/↑ Move  1 Slash  2 Block  3 Ultra  4 Admin", True, (100, 100, 100))
+            c2 = font_tiny.render("P2: A/D/W Move  Q Slash  E Block  R Ultra  F Admin", True, (100, 100, 100))
+            screen.blit(c1, (20, HEIGHT - 34))
+            screen.blit(c2, (20, HEIGHT - 18))
+        else:
+            ctrl = font_tiny.render("←/→ Move | ↑ Jump | 1 Slash | 2 Block | 3 Ultra | 4 Admin | ESC Menu", True, (100, 100, 100))
+            screen.blit(ctrl, (WIDTH // 2 - ctrl.get_width() // 2, HEIGHT - 20))
+
+        # round start text
+        if round_text_timer > 0:
+            if round_text_timer > 60:
+                rt = font_big.render("CREATOR  vs  CREATION", True, (200, 60, 60))
+            elif round_text_timer > 30:
+                rt = font_big.render("THE FINAL BATTLE", True, WHITE)
+            else:
+                rt = font_big.render("FIGHT!", True, GOLD)
+            rt.set_alpha(min(255, round_text_timer * 6))
+            screen.blit(rt, (WIDTH // 2 - rt.get_width() // 2, HEIGHT // 2 - 60))
+
+        # game over overlay
+        if game_over:
+            overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, min(160, game_over_timer * 3)))
+            screen.blit(overlay, (0, 0))
+
+            win_color = RED if winner == "1x1x1x1" else BLUE
+            role = "THE CREATION PREVAILS" if winner == "1x1x1x1" else "THE CREATOR STANDS"
+            win_txt = font_big.render(f"{winner} WINS!", True, win_color)
+            screen.blit(win_txt, (WIDTH // 2 - win_txt.get_width() // 2, HEIGHT // 2 - 60))
+
+            if game_over_timer > 20:
+                role_txt = font_med.render(role, True, win_color)
+                role_txt.set_alpha(min(255, (game_over_timer - 20) * 8))
+                screen.blit(role_txt, (WIDTH // 2 - role_txt.get_width() // 2, HEIGHT // 2 - 5))
+
+            if is_multi and game_over_timer > 30:
+                pw = font_small.render(
+                    f"{'P1' if winner == p1.name else 'P2'} VICTORY!", True, GOLD)
+                screen.blit(pw, (WIDTH // 2 - pw.get_width() // 2, HEIGHT // 2 + 30))
+
+            if game_over_timer > 50:
+                restart_txt = font_small.render("ENTER to rematch  |  ESC for menu", True, WHITE)
+                screen.blit(restart_txt, (WIDTH // 2 - restart_txt.get_width() // 2, HEIGHT // 2 + 60))
+
+        pygame.display.flip()
+
+
+# ══════════════════════════════════════════════════════════
+#  ENTRY POINT
+# ══════════════════════════════════════════════════════════
+
+def main():
+    while True:
+        chosen = character_select()
+        result_mode = mode_select()
+        if result_mode is None:
+            continue
+        while True:
+            result = game_loop(chosen, mode=result_mode)
+            if result == "restart":
+                continue
+            else:
+                break
+
+if __name__ == "__main__":
+    main()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
