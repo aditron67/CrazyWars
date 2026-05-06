@@ -4,6 +4,8 @@ import math
 import random
 import os
 import subprocess
+import socket
+import json
 
 pygame.init()
 pygame.mixer.init()
@@ -55,6 +57,78 @@ def start_music():
             print(f"Could not play music: {e}")
 
 start_music()
+
+# ─── NETWORKING ───
+NET_PORT = 5555
+net_conn = None
+net_recv_buf = b""
+
+def get_local_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+def net_send(sock, data):
+    if sock:
+        try:
+            sock.sendall(json.dumps(data).encode() + b'\n')
+        except Exception:
+            pass
+
+def net_recv(sock):
+    global net_recv_buf
+    results = []
+    if not sock:
+        return results
+    try:
+        sock.setblocking(False)
+        while True:
+            try:
+                chunk = sock.recv(8192)
+                if not chunk:
+                    break
+                net_recv_buf += chunk
+            except BlockingIOError:
+                break
+            except Exception:
+                break
+    except Exception:
+        pass
+    while b'\n' in net_recv_buf:
+        line, net_recv_buf = net_recv_buf.split(b'\n', 1)
+        try:
+            results.append(json.loads(line))
+        except Exception:
+            pass
+    return results
+
+def fighter_to_dict(f):
+    return {
+        "x": round(f.x, 1), "y": round(f.y, 1),
+        "hp": round(f.health, 1), "act": f.action,
+        "af": f.action_frame, "f": f.facing,
+        "uc": f.ultra_charged, "ua": f.ultra_active,
+        "st": f.stun_timer, "co": f.combo,
+        "sh": f.shake, "ht": f.hurt_timer,
+        "bt": f.block_timer, "og": f.on_ground,
+        "vx": round(f.vel_x, 2), "vy": round(f.vel_y, 2),
+        "acd": f.admin_cd
+    }
+
+def dict_to_fighter(f, d):
+    f.x = d["x"]; f.y = d["y"]; f.health = d["hp"]
+    f.action = d["act"]; f.action_frame = d["af"]
+    f.facing = d["f"]; f.ultra_charged = d["uc"]
+    f.ultra_active = d["ua"]; f.stun_timer = d["st"]
+    f.combo = d["co"]; f.shake = d["sh"]
+    f.hurt_timer = d["ht"]; f.block_timer = d["bt"]
+    f.on_ground = d["og"]; f.vel_x = d["vx"]
+    f.vel_y = d["vy"]; f.admin_cd = d["acd"]
 
 # ─── COLORS ───
 WHITE   = (255, 255, 255)
@@ -877,30 +951,18 @@ class Fighter:
                 atk = self.attack_rect
                 atk_n = pygame.Rect(min(atk.left, atk.right), atk.top, abs(atk.width), atk.height)
                 if atk_n.colliderect(other.rect):
-                    if other.action == "block" and other.block_timer > 0:
-                        # BLOCKED — ultra ends, blocker gets THEIR ultra charge
-                        clash_x = (self.x + other.x) // 2
-                        spawn_sparks(clash_x, self.y - 30, 40)
-                        self.ultra_active = False
-                        self.action = "idle"
-                        self.action_frame = 0
-                        other.ultra_charged = True
-                        other.shake = 8
-                        f = 1 if self.facing == "right" else -1
-                        self.vel_x = -f * 7
-                        other.vel_x = f * 3
-                    else:
-                        other.take_damage(self.ultra_dmg)
-                        self.combo += 1
-                        self.combo_timer = 90
-                        f = 1 if self.facing == "right" else -1
-                        other.vel_x = f * 3
-                        self.ultra_hit_cd = 10
-                        other.shake = 4
-                        col = RED if self.name == "1x1x1x1" else GOLD
-                        spawn_hit_effect(other.x, other.y - 20, col, 8)
-                        spawn_sparks(other.x + random.randint(-10, 10),
-                                     other.y - 30 + random.randint(-10, 10), 6)
+                    # Ultra slash goes through blocks — unblockable
+                    other.take_damage(self.ultra_dmg)
+                    self.combo += 1
+                    self.combo_timer = 90
+                    f = 1 if self.facing == "right" else -1
+                    other.vel_x = f * 3
+                    self.ultra_hit_cd = 10
+                    other.shake = 4
+                    col = RED if self.name == "1x1x1x1" else GOLD
+                    spawn_hit_effect(other.x, other.y - 20, col, 8)
+                    spawn_sparks(other.x + random.randint(-10, 10),
+                                 other.y - 30 + random.randint(-10, 10), 6)
 
             # auto-chase during ultra
             f = 1 if other.x > self.x else -1
@@ -908,6 +970,12 @@ class Fighter:
             if dist > 40:
                 self.x += f * self.speed * 1.2
             self.facing = "right" if other.x > self.x else "left"
+
+            # ultra expires after ~1 second (60 frames)
+            if self.ultra_frame >= 60:
+                self.ultra_active = False
+                self.action = "idle"
+                self.action_frame = 0
 
         # ── Normal action progression ──
         elif self.action not in ("idle", "walk"):
@@ -1356,7 +1424,7 @@ def admin_panel():
 # ══════════════════════════════════════════════════════════
 
 def mode_select():
-    """Returns 'ai' or 'multi'."""
+    """Returns 'ai', 'multi', or 'online'."""
     selected = 0
     frame = 0
 
@@ -1368,11 +1436,11 @@ def mode_select():
                 sys.exit()
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_UP:
-                    selected = 0
+                    selected = (selected - 1) % 3
                 elif event.key == pygame.K_DOWN:
-                    selected = 1
+                    selected = (selected + 1) % 3
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                    return "ai" if selected == 0 else "multi"
+                    return ["ai", "multi", "online"][selected]
                 elif event.key == pygame.K_ESCAPE:
                     return None
 
@@ -1383,24 +1451,191 @@ def mode_select():
 
         options = [
             ("VS  COMPUTER", "Fight the AI opponent"),
-            ("VS  FRIEND", "Local multiplayer — 2 players, 1 keyboard"),
+            ("VS  FRIEND  (LOCAL)", "2 players, 1 keyboard"),
+            ("VS  FRIEND  (ONLINE)", "Share your IP — friend joins over internet"),
         ]
         for i, (label, desc) in enumerate(options):
-            yy = 200 + i * 100
+            yy = 180 + i * 90
             col = GOLD if selected == i else GRAY
-            box = pygame.Rect(WIDTH // 2 - 200, yy - 10, 400, 70)
+            box = pygame.Rect(WIDTH // 2 - 220, yy - 10, 440, 70)
             pygame.draw.rect(screen, (25, 25, 35), box, border_radius=8)
             pygame.draw.rect(screen, col, box, 3, border_radius=8)
             if selected == i:
-                glow = pygame.Surface((410, 80), pygame.SRCALPHA)
-                pygame.draw.rect(glow, (*GOLD, 20), (0, 0, 410, 80), border_radius=10)
-                screen.blit(glow, (WIDTH // 2 - 205, yy - 15))
+                glow = pygame.Surface((450, 80), pygame.SRCALPHA)
+                pygame.draw.rect(glow, (*GOLD, 20), (0, 0, 450, 80), border_radius=10)
+                screen.blit(glow, (WIDTH // 2 - 225, yy - 15))
             lt = font_med.render(label, True, col)
             screen.blit(lt, (WIDTH // 2 - lt.get_width() // 2, yy))
             dt = font_tiny.render(desc, True, (150, 150, 150))
             screen.blit(dt, (WIDTH // 2 - dt.get_width() // 2, yy + 38))
 
         info = font_tiny.render("↑/↓ Select  |  ENTER to confirm  |  ESC back", True, (80, 80, 80))
+        screen.blit(info, (WIDTH // 2 - info.get_width() // 2, HEIGHT - 40))
+
+        pygame.display.flip()
+        clock.tick(60)
+
+
+# ══════════════════════════════════════════════════════════
+#  NETWORK LOBBY  –  Host or Join
+# ══════════════════════════════════════════════════════════
+
+def network_lobby():
+    """Shows HOST/JOIN screen. Returns 'host', 'client', or None."""
+    global net_conn, net_recv_buf
+
+    selected = 0
+    state = "menu"  # menu, hosting, joining
+    ip_input = ""
+    server_sock = None
+    message = ""
+    msg_timer = 0
+    frame = 0
+
+    while True:
+        frame += 1
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                if server_sock:
+                    server_sock.close()
+                pygame.quit()
+                sys.exit()
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    if server_sock:
+                        server_sock.close()
+                    if net_conn:
+                        net_conn.close()
+                        net_conn = None
+                    return None
+
+                if state == "menu":
+                    if event.key == pygame.K_UP:
+                        selected = 0
+                    elif event.key == pygame.K_DOWN:
+                        selected = 1
+                    elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                        if selected == 0:
+                            state = "hosting"
+                            server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                            server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                            server_sock.bind(("0.0.0.0", NET_PORT))
+                            server_sock.listen(1)
+                            server_sock.setblocking(False)
+                        else:
+                            state = "joining"
+
+                elif state == "joining":
+                    if event.key == pygame.K_BACKSPACE:
+                        ip_input = ip_input[:-1]
+                    elif event.key == pygame.K_RETURN and ip_input:
+                        try:
+                            net_conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                            net_conn.settimeout(5)
+                            ip_clean = ip_input.strip()
+                            if ":" in ip_clean:
+                                host, port = ip_clean.rsplit(":", 1)
+                                net_conn.connect((host, int(port)))
+                            else:
+                                net_conn.connect((ip_clean, NET_PORT))
+                            net_conn.setblocking(False)
+                            net_recv_buf = b""
+                            if server_sock:
+                                server_sock.close()
+                            return "client"
+                        except Exception as e:
+                            message = f"Could not connect!"
+                            msg_timer = 90
+                            if net_conn:
+                                net_conn.close()
+                            net_conn = None
+                    elif hasattr(event, 'unicode') and event.unicode in "0123456789.:":
+                        if len(ip_input) < 21:
+                            ip_input += event.unicode
+
+        if msg_timer > 0:
+            msg_timer -= 1
+
+        # Check for incoming connection (host)
+        if state == "hosting" and server_sock:
+            try:
+                conn, addr = server_sock.accept()
+                net_conn = conn
+                net_conn.setblocking(False)
+                net_recv_buf = b""
+                server_sock.close()
+                return "host"
+            except BlockingIOError:
+                pass
+            except Exception:
+                pass
+
+        # ── Draw ──
+        screen.fill((10, 8, 18))
+
+        if state == "menu":
+            title = font_big.render("ONLINE BATTLE", True, WHITE)
+            screen.blit(title, (WIDTH // 2 - title.get_width() // 2, 60))
+
+            for i, (label, desc) in enumerate([
+                ("HOST GAME", "You host — share your IP with your friend"),
+                ("JOIN GAME", "Enter your friend's IP to connect"),
+            ]):
+                yy = 220 + i * 100
+                col = GOLD if selected == i else GRAY
+                box = pygame.Rect(WIDTH // 2 - 200, yy - 10, 400, 70)
+                pygame.draw.rect(screen, (25, 25, 35), box, border_radius=8)
+                pygame.draw.rect(screen, col, box, 3, border_radius=8)
+                lt = font_med.render(label, True, col)
+                screen.blit(lt, (WIDTH // 2 - lt.get_width() // 2, yy))
+                dt = font_tiny.render(desc, True, (150, 150, 150))
+                screen.blit(dt, (WIDTH // 2 - dt.get_width() // 2, yy + 38))
+
+        elif state == "hosting":
+            ip = get_local_ip()
+            t1 = font_big.render("HOSTING...", True, GOLD)
+            screen.blit(t1, (WIDTH // 2 - t1.get_width() // 2, 80))
+
+            t2 = font_med.render("Tell your friend this IP:", True, WHITE)
+            screen.blit(t2, (WIDTH // 2 - t2.get_width() // 2, 180))
+
+            # Big IP display
+            ip_display = f"{ip}:{NET_PORT}"
+            ip_txt = font_big.render(ip_display, True, GREEN)
+            screen.blit(ip_txt, (WIDTH // 2 - ip_txt.get_width() // 2, 240))
+
+            t3 = font_small.render("They pick JOIN GAME and type this in!", True, (200, 200, 200))
+            screen.blit(t3, (WIDTH // 2 - t3.get_width() // 2, 320))
+
+            dots = "." * ((frame // 20) % 4)
+            wt = font_med.render(f"Waiting for player{dots}", True, GRAY)
+            screen.blit(wt, (WIDTH // 2 - wt.get_width() // 2, 420))
+
+        elif state == "joining":
+            t1 = font_big.render("JOIN GAME", True, GOLD)
+            screen.blit(t1, (WIDTH // 2 - t1.get_width() // 2, 80))
+
+            t2 = font_med.render("Enter friend's IP:", True, WHITE)
+            screen.blit(t2, (WIDTH // 2 - t2.get_width() // 2, 180))
+
+            bw, bh = 360, 60
+            bx = WIDTH // 2 - bw // 2
+            by = 240
+            pygame.draw.rect(screen, (25, 25, 35), (bx, by, bw, bh), border_radius=6)
+            pygame.draw.rect(screen, GOLD, (bx, by, bw, bh), 2, border_radius=6)
+            cursor = "|" if (frame // 30) % 2 == 0 else ""
+            it = font_med.render(ip_input + cursor, True, WHITE)
+            screen.blit(it, (bx + bw // 2 - it.get_width() // 2,
+                             by + bh // 2 - it.get_height() // 2))
+
+            t3 = font_tiny.render("Type the IP (e.g. 192.168.1.5:5555) and press ENTER", True, (150, 150, 150))
+            screen.blit(t3, (WIDTH // 2 - t3.get_width() // 2, 320))
+
+            if msg_timer > 0 and message:
+                mt = font_med.render(message, True, RED)
+                screen.blit(mt, (WIDTH // 2 - mt.get_width() // 2, 380))
+
+        info = font_tiny.render("ESC to go back", True, (80, 80, 80))
         screen.blit(info, (WIDTH // 2 - info.get_width() // 2, HEIGHT - 40))
 
         pygame.display.flip()
@@ -1499,7 +1734,7 @@ def character_select():
 # ══════════════════════════════════════════════════════════
 
 def game_loop(player_char, mode="ai"):
-    """mode='ai' for vs computer, mode='multi' for local 2P."""
+    """mode='ai', 'multi', 'net_host', or 'net_client'."""
     ground_y = HEIGHT - 70
 
     if player_char == "1x1x1x1":
@@ -1508,9 +1743,14 @@ def game_loop(player_char, mode="ai"):
         opponent_char = "1x1x1x1"
 
     p1 = Fighter(player_char, 200, ground_y - 34, "right", True, {})
-    p2 = Fighter(opponent_char, WIDTH - 200, ground_y - 34, "left", mode == "multi", {})
+    p2 = Fighter(opponent_char, WIDTH - 200, ground_y - 34, "left", True, {})
 
     is_multi = (mode == "multi")
+    is_net_host = (mode == "net_host")
+    is_net_client = (mode == "net_client")
+    is_network = is_net_host or is_net_client
+    remote_keys = {}
+    client_acts = []
 
     frame = 0
     game_over = False
@@ -1536,86 +1776,149 @@ def game_loop(player_char, mode="ai"):
                     return "restart"
 
                 if not game_over and round_text_timer <= 0:
-                    # ── P1 controls (arrow keys + 1234) ──
-                    if p1.stun_timer <= 0:
-                        if event.key == pygame.K_1:
-                            p1.start_action("slash", 15)
-                        elif event.key == pygame.K_2:
-                            if p1.start_action("block", 22):
-                                p1.block_timer = 22
-                        elif event.key == pygame.K_3:
-                            p1.activate_ultra()
-                        elif event.key == pygame.K_4:
-                            p1.activate_admin(p2)
+                    if is_net_client:
+                        # Client: collect keys to send to host as P2
+                        if event.key == pygame.K_1: client_acts.append("slash")
+                        elif event.key == pygame.K_2: client_acts.append("block")
+                        elif event.key == pygame.K_3: client_acts.append("ultra")
+                        elif event.key == pygame.K_4: client_acts.append("admin")
+                    else:
+                        # ── P1 controls (arrow keys + 1234) ──
+                        if p1.stun_timer <= 0:
+                            if event.key == pygame.K_1:
+                                p1.start_action("slash", 15)
+                            elif event.key == pygame.K_2:
+                                if p1.start_action("block", 22):
+                                    p1.block_timer = 22
+                            elif event.key == pygame.K_3:
+                                p1.activate_ultra()
+                            elif event.key == pygame.K_4:
+                                p1.activate_admin(p2)
 
-                    # ── P2 controls (WASD + QERF) — only in multiplayer ──
-                    if is_multi and p2.stun_timer <= 0:
-                        if event.key == pygame.K_q:
-                            p2.start_action("slash", 15)
-                        elif event.key == pygame.K_e:
-                            if p2.start_action("block", 22):
-                                p2.block_timer = 22
-                        elif event.key == pygame.K_r:
-                            p2.activate_ultra()
-                        elif event.key == pygame.K_f:
-                            p2.activate_admin(p1)
+                        # ── P2 controls (WASD + QERF) — only in local multiplayer ──
+                        if is_multi and p2.stun_timer <= 0:
+                            if event.key == pygame.K_q:
+                                p2.start_action("slash", 15)
+                            elif event.key == pygame.K_e:
+                                if p2.start_action("block", 22):
+                                    p2.block_timer = 22
+                            elif event.key == pygame.K_r:
+                                p2.activate_ultra()
+                            elif event.key == pygame.K_f:
+                                p2.activate_admin(p1)
 
         if not game_over and round_text_timer <= 0:
-            keys = pygame.key.get_pressed()
-
-            # ── P1 movement (arrow keys) ──
-            if p1.stun_timer <= 0 and p1.action in ("idle", "walk") and not p1.ultra_active:
-                if keys[pygame.K_LEFT]:
-                    p1.x -= p1.speed
-                    p1.action = "walk"
-                elif keys[pygame.K_RIGHT]:
-                    p1.x += p1.speed
-                    p1.action = "walk"
-                elif p1.action == "walk":
-                    p1.action = "idle"
-            if keys[pygame.K_UP] and p1.on_ground and p1.stun_timer <= 0:
-                p1.vel_y = -12
-                p1.on_ground = False
-
-            # ── P2 movement ──
-            if is_multi:
-                if p2.stun_timer <= 0 and p2.action in ("idle", "walk") and not p2.ultra_active:
-                    if keys[pygame.K_a]:
-                        p2.x -= p2.speed
-                        p2.action = "walk"
-                    elif keys[pygame.K_d]:
-                        p2.x += p2.speed
-                        p2.action = "walk"
-                    elif p2.action == "walk":
-                        p2.action = "idle"
-                if keys[pygame.K_w] and p2.on_ground and p2.stun_timer <= 0:
-                    p2.vel_y = -12
-                    p2.on_ground = False
+            if is_net_client:
+                # Client: send keys to host, receive state, no local simulation
+                keys = pygame.key.get_pressed()
+                net_send(net_conn, {
+                    "left": keys[pygame.K_LEFT],
+                    "right": keys[pygame.K_RIGHT],
+                    "up": keys[pygame.K_UP],
+                    "acts": client_acts
+                })
+                client_acts = []
+                for msg in net_recv(net_conn):
+                    if "p1" in msg:
+                        dict_to_fighter(p1, msg["p1"])
+                        dict_to_fighter(p2, msg["p2"])
+                        game_over = msg.get("go", False)
+                        winner = msg.get("w")
+                        round_text_timer = msg.get("rt", 0)
             else:
-                # AI controls P2
-                ai_update(p2, p1, difficulty=0.7)
+                # Host or solo: receive remote keys if hosting
+                if is_net_host and net_conn:
+                    for msg in net_recv(net_conn):
+                        remote_keys = msg
 
-            # face opponent
-            if p1.action in ("idle", "walk") and p1.stun_timer <= 0:
-                p1.facing = "right" if p2.x > p1.x else "left"
-            if p2.action in ("idle", "walk") and p2.stun_timer <= 0:
-                p2.facing = "right" if p1.x > p2.x else "left"
+                keys = pygame.key.get_pressed()
 
-            # update fighters
-            p1.update(p2)
-            p2.update(p1)
+                # ── P1 movement (arrow keys) ──
+                if p1.stun_timer <= 0 and p1.action in ("idle", "walk") and not p1.ultra_active:
+                    if keys[pygame.K_LEFT]:
+                        p1.x -= p1.speed
+                        p1.action = "walk"
+                    elif keys[pygame.K_RIGHT]:
+                        p1.x += p1.speed
+                        p1.action = "walk"
+                    elif p1.action == "walk":
+                        p1.action = "idle"
+                if keys[pygame.K_UP] and p1.on_ground and p1.stun_timer <= 0:
+                    p1.vel_y = -12
+                    p1.on_ground = False
 
-            # update entangle popups + projectiles
-            update_entangle_popups()
-            update_entangle_projectiles()
+                # ── P2 movement ──
+                if is_net_host:
+                    # P2 controlled by remote player
+                    if p2.stun_timer <= 0 and p2.action in ("idle", "walk") and not p2.ultra_active:
+                        if remote_keys.get("left"):
+                            p2.x -= p2.speed
+                            p2.action = "walk"
+                        elif remote_keys.get("right"):
+                            p2.x += p2.speed
+                            p2.action = "walk"
+                        elif p2.action == "walk":
+                            p2.action = "idle"
+                    if remote_keys.get("up") and p2.on_ground and p2.stun_timer <= 0:
+                        p2.vel_y = -12
+                        p2.on_ground = False
+                    for act in remote_keys.get("acts", []):
+                        if p2.stun_timer <= 0:
+                            if act == "slash":
+                                p2.start_action("slash", 15)
+                            elif act == "block":
+                                if p2.start_action("block", 22):
+                                    p2.block_timer = 22
+                            elif act == "ultra":
+                                p2.activate_ultra()
+                            elif act == "admin":
+                                p2.activate_admin(p1)
+                    remote_keys["acts"] = []
+                elif is_multi:
+                    if p2.stun_timer <= 0 and p2.action in ("idle", "walk") and not p2.ultra_active:
+                        if keys[pygame.K_a]:
+                            p2.x -= p2.speed
+                            p2.action = "walk"
+                        elif keys[pygame.K_d]:
+                            p2.x += p2.speed
+                            p2.action = "walk"
+                        elif p2.action == "walk":
+                            p2.action = "idle"
+                    if keys[pygame.K_w] and p2.on_ground and p2.stun_timer <= 0:
+                        p2.vel_y = -12
+                        p2.on_ground = False
+                else:
+                    # AI controls P2
+                    ai_update(p2, p1, difficulty=0.7)
 
-            # check win
-            if p1.health <= 0:
-                game_over = True
-                winner = p2.name
-            elif p2.health <= 0:
-                game_over = True
-                winner = p1.name
+                # face opponent
+                if p1.action in ("idle", "walk") and p1.stun_timer <= 0:
+                    p1.facing = "right" if p2.x > p1.x else "left"
+                if p2.action in ("idle", "walk") and p2.stun_timer <= 0:
+                    p2.facing = "right" if p1.x > p2.x else "left"
+
+                # update fighters
+                p1.update(p2)
+                p2.update(p1)
+
+                # update entangle popups + projectiles
+                update_entangle_popups()
+                update_entangle_projectiles()
+
+                # check win
+                if p1.health <= 0:
+                    game_over = True
+                    winner = p2.name
+                elif p2.health <= 0:
+                    game_over = True
+                    winner = p1.name
+
+                # ── NET HOST: send state to client ──
+                if is_net_host and net_conn:
+                    net_send(net_conn, {
+                        "p1": fighter_to_dict(p1), "p2": fighter_to_dict(p2),
+                        "go": game_over, "w": winner, "rt": round_text_timer,
+                    })
 
         if round_text_timer > 0:
             round_text_timer -= 1
@@ -1653,7 +1956,11 @@ def game_loop(player_char, mode="ai"):
         draw_hud(screen, p1, p2, frame)
 
         # controls reminder
-        if is_multi:
+        if is_network:
+            role_str = "HOST (P1)" if is_net_host else "CLIENT (P2)"
+            ctrl = font_tiny.render(f"ONLINE {role_str} | ←/→ Move | ↑ Jump | 1 Slash | 2 Block | 3 Ultra | 4 Admin", True, (100, 100, 100))
+            screen.blit(ctrl, (WIDTH // 2 - ctrl.get_width() // 2, HEIGHT - 20))
+        elif is_multi:
             c1 = font_tiny.render("P1: ←/→/↑ Move  1 Slash  2 Block  3 Ultra  4 Admin", True, (100, 100, 100))
             c2 = font_tiny.render("P2: A/D/W Move  Q Slash  E Block  R Ultra  F Admin", True, (100, 100, 100))
             screen.blit(c1, (20, HEIGHT - 34))
@@ -1689,7 +1996,7 @@ def game_loop(player_char, mode="ai"):
                 role_txt.set_alpha(min(255, (game_over_timer - 20) * 8))
                 screen.blit(role_txt, (WIDTH // 2 - role_txt.get_width() // 2, HEIGHT // 2 - 5))
 
-            if is_multi and game_over_timer > 30:
+            if (is_multi or is_network) and game_over_timer > 30:
                 pw = font_small.render(
                     f"{'P1' if winner == p1.name else 'P2'} VICTORY!", True, GOLD)
                 screen.blit(pw, (WIDTH // 2 - pw.get_width() // 2, HEIGHT // 2 + 30))
@@ -1706,16 +2013,32 @@ def game_loop(player_char, mode="ai"):
 # ══════════════════════════════════════════════════════════
 
 def main():
+    global net_conn, net_recv_buf
     while True:
         chosen = character_select()
         result_mode = mode_select()
         if result_mode is None:
             continue
+        if result_mode == "online":
+            net_result = network_lobby()
+            if net_result is None:
+                continue
+            game_mode = "net_host" if net_result == "host" else "net_client"
+        else:
+            game_mode = result_mode
         while True:
-            result = game_loop(chosen, mode=result_mode)
+            result = game_loop(chosen, mode=game_mode)
             if result == "restart":
                 continue
             else:
+                # clean up network
+                if net_conn:
+                    try:
+                        net_conn.close()
+                    except Exception:
+                        pass
+                    net_conn = None
+                    net_recv_buf = b""
                 break
 
 if __name__ == "__main__":
@@ -1964,3 +2287,4 @@ if __name__ == "__main__":
 
 
 
+#c hcdgkhf
